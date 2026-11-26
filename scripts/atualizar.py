@@ -29,6 +29,8 @@ STATS_MAX_AGE_H = 6       # estatísticas de liga renovadas a cada 6 horas
 RHO = -0.08               # correção de Dixon-Coles para placares baixos
 FORM_HALF_LIFE_DAYS = 365 # forma recente: um jogo de 1 ano atrás vale metade de um jogo de hoje
 PREV_SEASON_MAX_AGE_D = 30  # jogos da temporada anterior: buscados de novo a cada 30 dias
+ODDS_MAX_AGE_H = 3        # odds: a API atualiza a cada 3 horas; buscamos no mesmo ritmo
+VALUE_MIN = 0.05          # destaque de "valor" a partir de +5% (chance do app × melhor odd − 1)
 GOALS_SHRINK = 0.19       # puxa o total de gols esperado 19% para a média da liga (corrige excesso de confiança
                           # nos mercados de gols; ajustado em 2024-25 e confirmado em 2025-26, 4.706 jogos)
 # (meia-vida e uso da temporada anterior escolhidos por teste em 22 temporadas reais, 6.846 jogos)
@@ -160,6 +162,72 @@ def predict(key, st, home, away):
     return dict(score_model(lh, la), sh=th.get("c", th["r"][:3]), sa=ta.get("c", ta["r"][:3]), fh=th.get("f", ""), fa=ta.get("f", ""))
 
 
+def _median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    return None if not n else (xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2)
+
+
+ODDS_MARKETS = {  # nossa chave -> (nome da aposta na API, valor na API, grupo de resultados da mesma aposta)
+    "home": ("match winner", "home", "1x2"), "draw": ("match winner", "draw", "1x2"), "away": ("match winner", "away", "1x2"),
+    "o15": ("goals over/under", "over 1.5", "ou15"), "u15": ("goals over/under", "under 1.5", "ou15"),
+    "o25": ("goals over/under", "over 2.5", "ou25"), "u25": ("goals over/under", "under 2.5", "ou25"),
+    "by": ("both teams score", "yes", "btts"), "bn": ("both teams score", "no", "btts"),
+}
+
+
+def parse_odds(bookmakers):
+    """Recebe a lista de casas (formato API-Football) e devolve, por mercado:
+    p = chance implícita de consenso (mediana entre as casas, sem a margem de cada uma),
+    best = melhor odd encontrada, bk = casa que paga a melhor odd, n = número de casas."""
+    fair, best = {}, {}
+    for b in bookmakers or []:
+        groups = {}
+        for bet in b.get("bets") or []:
+            name = (bet.get("name") or "").strip().lower().replace("both teams to score", "both teams score")
+            for v in bet.get("values") or []:
+                try:
+                    odd = float(v.get("odd"))
+                except (TypeError, ValueError):
+                    continue
+                if odd <= 1.0:
+                    continue
+                val = str(v.get("value") or "").strip().lower()
+                for key, (bn, bv, grp) in ODDS_MARKETS.items():
+                    if name == bn and val == bv:
+                        groups.setdefault(grp, {})[key] = odd
+        for grp, outs in groups.items():
+            need = {k for k, x in ODDS_MARKETS.items() if x[2] == grp}
+            if set(outs) != need:
+                continue  # sem todos os resultados da aposta não dá para tirar a margem
+            inv = {k: 1 / o for k, o in outs.items()}
+            tot = sum(inv.values())
+            for k, o in outs.items():
+                fair.setdefault(k, []).append(inv[k] / tot)
+                if o > best.get(k, (0, ""))[0]:
+                    best[k] = (o, b.get("name") or "")
+    out = {}
+    for k, ps in fair.items():
+        out[k] = {"p": round(_median(ps), 4), "best": round(best[k][0], 2), "bk": best[k][1], "n": len(ps)}
+    return out
+
+
+def model_prob(m, key):
+    """Chance do app para cada mercado de odds."""
+    hda = m.get("hda") or [None, None, None]
+    return {"home": hda[0], "draw": hda[1], "away": hda[2],
+            "o15": m.get("p2"), "u15": None if m.get("p2") is None else 1 - m["p2"],
+            "o25": m.get("p3"), "u25": None if m.get("p3") is None else 1 - m["p3"],
+            "by": m.get("btts"), "bn": None if m.get("btts") is None else 1 - m["btts"]}.get(key)
+
+
+def attach_value(m):
+    """Calcula o valor (chance do app × melhor odd − 1) de cada mercado com odds."""
+    for key, o in (m.get("odds") or {}).get("mk", {}).items():
+        pm = model_prob(m, key)
+        o["v"] = None if pm is None else round(pm * o["best"] - 1, 4)
+
+
 def team_table(key, prev_rows, cur_rows):
     """Simulação da temporada: para cada jogo já encerrado, calcula o que o modelo teria previsto
     usando só os jogos anteriores a ele, e compara com o que aconteceu, time por time."""
@@ -272,6 +340,27 @@ class APIFootball:
             res = [ft["home"], ft["away"]] if st in self.FINISHED and ft.get("home") is not None else ("adiado" if st in self.VOID else None)
             out.append(dict(fid="af%d" % f["fixture"]["id"], lg=key, lid=lg["id"], season=lg["season"], ko=f["fixture"]["date"],
                             h=f["teams"]["home"]["name"], a=f["teams"]["away"]["name"], res=res))
+        return out
+
+    def odds_league(self, lid, season, max_pages=6):
+        """Odds pré-jogo dos próximos jogos de uma liga: {fid: {mercado: {...}}}."""
+        out, page, total = {}, 1, 1
+        while page <= total and page <= max_pages:
+            js, hd = http_json(self.BASE + "/odds?" + urllib.parse.urlencode(dict(league=lid, season=season, page=page)), self.h)
+            self.calls += 1
+            rem = {k.lower(): v for k, v in hd.items()}.get("x-ratelimit-requests-remaining")
+            if rem is not None:
+                self.remaining = int(rem)
+            if js.get("errors"):
+                raise ProviderError(json.dumps(js["errors"], ensure_ascii=False))
+            for it in js.get("response") or []:
+                fid = (it.get("fixture") or {}).get("id")
+                if fid:
+                    mk = parse_odds(it.get("bookmakers"))
+                    if mk:
+                        out["af%d" % fid] = mk
+            total = int((js.get("paging") or {}).get("total") or 1)
+            page += 1
         return out
 
     def finished_in(self, f, season=None):
@@ -427,7 +516,7 @@ def link(existing, f):
     return best if score >= 0.6 else None
 
 
-COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc")
+COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "odds")
 
 
 def archive(data):
@@ -563,6 +652,38 @@ def main():
                 m.update(predict(f["lg"], stats[f["lg"]], f["h"], f["a"])); upd += 1
     log("Jogos novos: %d · previsões calculadas: %d" % (added, upd))
 
+    # 4) odds das casas (só antes do apito; ficam congeladas depois, como as previsões)
+    odds_ok, odds_fail, with_odds = [], [], 0
+    if hasattr(prov, "odds_league"):
+        upcoming = {}
+        for date in new_dates:
+            for f in fx[date]:
+                if datetime.fromisoformat(f["ko"]) > now and f["res"] is None:
+                    upcoming.setdefault((f["lg"], f["lid"], f["season"]), []).append(f["fid"])
+        for (lg, lid, season), fids in upcoming.items():
+            ck = "odds|%s|%s" % (lg, season)
+            c = cache.get(ck)
+            if c and (now - datetime.fromisoformat(c["at"])).total_seconds() < ODDS_MAX_AGE_H * 3600:
+                book, got = c["odds"], datetime.fromisoformat(c["at"])
+            else:
+                try:
+                    book, got = prov.odds_league(lid, season), now
+                    cache[ck] = {"at": now.isoformat(), "odds": book}
+                except ProviderError as e:
+                    odds_fail.append(LEAGUES[lg]["name"]); log("Aviso: sem odds de %s -> %s" % (LEAGUES[lg]["name"], str(e)[:120]))
+                    continue
+            odds_ok.append(LEAGUES[lg]["name"])
+            for date in new_dates:
+                for m in find_day(data, date)["matches"]:
+                    if m.get("fid") in book and m.get("ko") and datetime.fromisoformat(m["ko"]) > now:
+                        m["odds"] = {"at": got.astimezone(TZ).strftime("%d/%m %H:%M"), "mk": book[m["fid"]]}
+                        attach_value(m); with_odds += 1
+    for date in new_dates:  # previsões recalculadas -> valor recalculado
+        for m in find_day(data, date)["matches"]:
+            if m.get("odds") and m.get("ko") and datetime.fromisoformat(m["ko"]) > now:
+                attach_value(m)
+    log("Odds: %d jogos com odds · ligas: %s" % (with_odds, ", ".join(odds_ok) or "nenhuma"))
+
     for d in data["days"]:
         d["matches"] = sorted([m for m in d["matches"] if "p1" in m], key=lambda m: (m.get("t", ""), m["h"]))
     data["days"] = sorted([d for d in data["days"] if d["matches"]], key=lambda d: d["date"])
@@ -579,7 +700,7 @@ def main():
                         found_today=found[new_dates[0]], found_tomorrow=found[new_dates[1]],
                         leagues_found=leagues_found, leagues_ok=sorted(LEAGUES[k]["name"] for k in stats),
                         leagues_fail=[n for n, _ in fails], fail_reason=friendly([fails[0][1]]) if fails else None,
-                        added=added, updated=upd)
+                        added=added, updated=upd, odds_matches=with_odds, odds_fail=odds_fail)
     data.pop("warning", None)
     if sum(found.values()) and not stats:
         data["error"] = friendly([fails[0][1]]) if fails else "Os jogos foram encontrados, mas não consegui as estatísticas das competições."
