@@ -29,6 +29,8 @@ STATS_MAX_AGE_H = 6       # estatísticas de liga renovadas a cada 6 horas
 RHO = -0.08               # correção de Dixon-Coles para placares baixos
 FORM_HALF_LIFE_DAYS = 365 # forma recente: um jogo de 1 ano atrás vale metade de um jogo de hoje
 PREV_SEASON_MAX_AGE_D = 30  # jogos da temporada anterior: buscados de novo a cada 30 dias
+GOALS_SHRINK = 0.19       # puxa o total de gols esperado 19% para a média da liga (corrige excesso de confiança
+                          # nos mercados de gols; ajustado em 2024-25 e confirmado em 2025-26, 4.706 jogos)
 # (meia-vida e uso da temporada anterior escolhidos por teste em 22 temporadas reais, 6.846 jogos)
 
 # ---------------------------------------------------------------------------
@@ -148,8 +150,13 @@ def predict(key, st, home, away):
     def_h = math.sqrt(r(s[2], s[0], mu) * r(s[5], s[3], muA))
     att_a = math.sqrt(r(v[1], v[0], mu) * r(v[7], v[6], muA))
     def_a = math.sqrt(r(v[2], v[0], mu) * r(v[8], v[6], muH))
-    lh = min(5.0, max(0.15, muH * att_h * def_a))
-    la = min(5.0, max(0.15, muA * att_a * def_h))
+    lh = muH * att_h * def_a
+    la = muA * att_a * def_h
+    tot, mean_tot = lh + la, muH + muA
+    if tot > 0:
+        f = (mean_tot + (1 - GOALS_SHRINK) * (tot - mean_tot)) / tot
+        lh, la = lh * f, la * f
+    lh, la = min(5.0, max(0.15, lh)), min(5.0, max(0.15, la))
     return dict(score_model(lh, la), sh=th.get("c", th["r"][:3]), sa=ta.get("c", ta["r"][:3]), fh=th.get("f", ""), fa=ta.get("f", ""))
 
 
