@@ -2,9 +2,8 @@ name: Atualizar gol provável
 
 on:
   schedule:
-    - cron: "0 10 * * *"
-    - cron: "0 15 * * *"
-  workflow_dispatch:
+    - cron: "17 0-4,11-23 * * *"   # de hora em hora, das 08h17 à 01h17 (horário de Brasília)
+  workflow_dispatch:        # botão "Run workflow" para rodar na hora
 
 permissions:
   contents: write
