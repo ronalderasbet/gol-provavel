@@ -365,7 +365,7 @@ function viewDay(main,date,kind){
     }
     list.textContent="";
     if (!day){
-      list.appendChild(el("p","empty", kind==="amanha" ? "Os jogos de amanhã aparecem depois da atualização automática das 7h ou 12h. Toque em Atualizar para buscar agora." : "Nenhum jogo registrado para este dia. Toque em Atualizar para buscar."));
+      list.appendChild(el("p","empty", kind==="amanha" ? "Os jogos de amanhã aparecem na próxima atualização automática (de hora em hora). Toque em Atualizar para buscar agora." : "Nenhum jogo registrado para este dia. Toque em Atualizar para buscar."));
       return;
     }
     var groups={};
@@ -571,7 +571,7 @@ function refresh(){
   if (!canDispatch()){
     setBusy(true,"Recarregando…");
     loadData().then(function(){ setStatus(); route(); setBusy(false);
-      toast(S.demo ? "Prévia: na versão instalada este botão busca dados novos." : "Dados recarregados. Para buscar jogos e placares na hora, ative a atualização com um toque em Ajustes.");
+      toast(S.demo ? "Prévia: na versão instalada este botão busca dados novos." : "Dados recarregados. O app se atualiza sozinho de hora em hora; para buscar na hora, ative a atualização com um toque em Ajustes.");
     }).catch(function(){ setBusy(false); toast("Sem conexão. Tente de novo em instantes."); });
     return;
   }
@@ -632,7 +632,7 @@ function viewSettings(main){
   // atualização com um toque
   var R=repoInfo(), tk=store.get("token","");
   var c2=el("section","card"); c2.appendChild(el("h2",null,"Atualização com um toque"));
-  c2.appendChild(el("p",null,"O app já se atualiza sozinho às 7h e às 12h. Se quiser que o botão Atualizar busque jogos e placares na hora, faça isto uma única vez neste aparelho:"));
+  c2.appendChild(el("p",null,"O app já se atualiza sozinho de hora em hora, das 8h à 1h. Se quiser que o botão Atualizar busque jogos e placares na hora, faça isto uma única vez neste aparelho:"));
   var ol3=el("ol");
   var li1=el("li"); li1.appendChild(document.createTextNode("Toque em ")); var lk=el("a",null,"criar chave de acesso no GitHub"); lk.href="https://github.com/settings/personal-access-tokens/new"; lk.target="_blank"; lk.rel="noopener"; li1.appendChild(lk); li1.appendChild(document.createTextNode(" (entre na sua conta se pedir).")); ol3.appendChild(li1);
   ["Em “Token name”, escreva: gol-provavel. Em “Expiration”, escolha a opção mais longa.",
@@ -706,9 +706,30 @@ loadData().then(function(){ setStatus(); route(); })
 if ("serviceWorker" in navigator && /^https:$/.test(location.protocol) && /\.github\.io$|localhost/.test(location.hostname)){
   try{ navigator.serviceWorker.register("sw.js").catch(function(){}); }catch(e){}
 }
+/* checagem automática: ao voltar ao app e a cada 10 minutos com ele aberto */
+var lastCheck=Date.now();
+function stamp(d){ return d ? (d.updated||"")+" "+(d.updated_time||"") : ""; }
+function checkNew(silentIfSame){
+  if (busy || S.demo || !S.data) return;
+  lastCheck=Date.now();
+  var before=stamp(S.data), dayChanged=todayBR()!==S.today;
+  fetch("data.json?t="+Date.now(),{cache:"no-store"}).then(function(r){ return r.ok?r.json():null; }).then(function(d){
+    if (!d) return;
+    if (dayChanged){ S.today=todayBR(); S.data=d; S.months={}; setStatus(); route(); return; }
+    if (stamp(d)===before) return;
+    var t=$("toast"); t.textContent=""; t.hidden=false; clearTimeout(toastT);
+    t.appendChild(document.createTextNode("Chegaram placares e jogos novos. "));
+    var b=el("button",null,"Ver agora"); b.type="button";
+    b.style.cssText="margin-left:.4rem;border:0;border-radius:8px;padding:.3rem .7rem;font-weight:700;background:#f2c94c;color:#13261d;cursor:pointer";
+    b.addEventListener("click",function(){ S.data=d; S.months={}; setStatus(); route(); t.hidden=true; });
+    t.appendChild(b);
+    toastT=setTimeout(function(){ t.hidden=true; },20000);
+  }).catch(function(){});
+}
 document.addEventListener("visibilitychange",function(){
-  if (document.visibilityState==="visible" && S.data && !busy && todayBR()!==S.today){ S.today=todayBR(); loadData().then(function(){ setStatus(); route(); }); }
+  if (document.visibilityState==="visible" && (Date.now()-lastCheck>5*60000 || todayBR()!==S.today)) checkNew();
 });
+setInterval(function(){ if (document.visibilityState==="visible") checkNew(); },10*60000);
 })();
 </script>
 </body>
