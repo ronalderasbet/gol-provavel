@@ -107,6 +107,13 @@ summary::before{content:"+ "} details[open] summary::before{content:"− "}
 .form{display:inline-flex;gap:3px;vertical-align:middle}
 .form i{font-style:normal;font-weight:700;font-size:.72rem;width:1.35em;height:1.35em;display:inline-grid;place-items:center;border-radius:4px;color:#fff}
 .form i.V{background:var(--good)} .form i.E{background:var(--draw)} .form i.D{background:var(--bad)}
+.chip.val{background:#f2c94c;color:#13261d}
+.mkline{margin:.15rem 0 0 4rem;font-size:.78rem;color:var(--muted)}
+.otbl{width:100%;border-collapse:collapse;font-size:.85rem;margin-top:.5rem;min-width:0}
+.otbl th,.otbl td{padding:.3rem .35rem;border-bottom:1px solid var(--line);text-align:right}
+.otbl th:first-child,.otbl td:first-child{text-align:left}
+.otbl td.vp{color:var(--good);font-weight:700}
+.note{font-size:.8rem;color:var(--muted);margin:.4rem 0 0}
 .chip.up{background:#e5f4e4;color:#14532d} .chip.down{background:#fbebeb;color:#7f1d1d}
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .chip.up{background:#173f2a;color:#a7e3bf} :root:not([data-theme="light"]) .chip.down{background:#4a1f1a;color:#f3b3a6} }
 .tlist{margin-top:.6rem}
@@ -160,7 +167,7 @@ th{font-weight:600;color:var(--muted)}
 [hidden]{display:none!important}
 @media (max-width:520px){
   .row{grid-template-columns:2.9rem 1fr auto;gap:.55rem}
-  .hda,.hdal,details,.formrow{margin-left:3.45rem}
+  .hda,.hdal,details,.formrow,.mkline{margin-left:3.45rem}
   .pct{font-size:1.75rem}
   .btn .lbl{display:none}
 }
@@ -299,7 +306,7 @@ function setStatus(){
 function route(){
   var h=(location.hash||"#hoje").slice(1);
   document.querySelectorAll("nav.bottom a").forEach(function(a){
-    var on = a.dataset.v===h || (h.indexOf("dia-")===0 && a.dataset.v==="historico") || (h==="times" && a.dataset.v==="desempenho");
+    var on = a.dataset.v===h || (h.indexOf("dia-")===0 && a.dataset.v==="historico") || ((h==="times"||h==="mercado") && a.dataset.v==="desempenho");
     if (on) a.setAttribute("aria-current","page"); else a.removeAttribute("aria-current");
   });
   var main=$("main"); main.textContent="";
@@ -310,6 +317,7 @@ function route(){
   if (h==="historico") return withMonths(main,viewHistory);
   if (h==="desempenho") return withMonths(main,viewPerf);
   if (h==="times") return viewTeams(main);
+  if (h==="mercado") return withMonths(main,viewMarket);
   if (h==="ajustes") return viewSettings(main);
   location.hash="hoje";
 }
@@ -318,6 +326,32 @@ function withMonths(main,fn){
   loadMonths().then(function(){ main.textContent=""; fn(main); });
 }
 window.addEventListener("hashchange",route);
+
+/* ================= odds e valor ================= */
+var VALUE_MIN=0.05;
+var ONAMES={home:"Vitória do mandante",draw:"Empate",away:"Vitória do visitante",o15:"2+ gols (mais de 1,5)",u15:"Até 1 gol (menos de 1,5)",
+            o25:"3+ gols (mais de 2,5)",u25:"Até 2 gols (menos de 2,5)",by:"Ambos marcam: sim",bn:"Ambos marcam: não"};
+var OORDER=["home","draw","away","o15","u15","o25","u25","by","bn"];
+function oddsKey(m,mk){
+  if (mk==="fav") return m.hda ? (m.hda[0]>=m.hda[2]?"home":"away") : null;
+  return {p2:"o15",p3:"o25",btts:"by"}[mk]||null;
+}
+function oddsOf(m,key){ return m.odds&&m.odds.mk&&key ? m.odds.mk[key]||null : null; }
+function appProb(m,key){
+  var h=m.hda||[null,null,null];
+  return {home:h[0],draw:h[1],away:h[2],o15:m.p2,u15:m.p2==null?null:1-m.p2,o25:m.p3,u25:m.p3==null?null:1-m.p3,
+          by:m.btts,bn:m.btts==null?null:1-m.btts}[key];
+}
+function outcome(m,key){
+  if (!hasRes(m)) return null; var x=m.res[0], y=m.res[1], g=x+y;
+  return {home:x>y,draw:x===y,away:x<y,o15:g>=2,u15:g<=1,o25:g>=3,u25:g<=2,by:x>=1&&y>=1,bn:!(x>=1&&y>=1)}[key];
+}
+function bestValue(m){
+  var b=null; if(!m.odds||!m.odds.mk) return null;
+  Object.keys(m.odds.mk).forEach(function(k){ var o=m.odds.mk[k]; if(o.v!=null && o.v>=VALUE_MIN && (!b||o.v>b.v)) b={k:k,v:o.v,o:o}; });
+  return b;
+}
+function odd(x){ return x.toFixed(2).replace(".",","); }
 
 /* ================= times x previsão ================= */
 var MIN_J=8;
@@ -374,7 +408,7 @@ function filterBar(main,day,rerender){
   c4.appendChild(q); f.appendChild(c4);
   var c5=el("div"); var l5=el("label",null,"Mostrar"); l5.htmlFor="fShow"; c5.appendChild(l5);
   var s5=el("select"); s5.id="fShow";
-  [["pass","Só os que passam no filtro"],["all","Todos os jogos do dia"]].forEach(function(x){ var o=el("option",null,x[1]); o.value=x[0]; if(x[0]===S.show) o.selected=true; s5.appendChild(o); });
+  [["pass","Só os que passam no filtro"],["valor","Só jogos com valor (★)"],["all","Todos os jogos do dia"]].forEach(function(x){ var o=el("option",null,x[1]); o.value=x[0]; if(x[0]===S.show) o.selected=true; s5.appendChild(o); });
   s5.addEventListener("change",function(){ S.show=s5.value; store.set("show",S.show); rerender(); });
   c5.appendChild(s5); f.appendChild(c5);
   main.appendChild(f);
@@ -411,7 +445,9 @@ function viewDay(main,date,kind){
     var any=false;
     keys.forEach(function(k){
       var g=groups[k].slice().sort(function(a,b){ return (a.t||"")===(b.t||"") ? (prob(b,S.market)||0)-(prob(a,S.market)||0) : ((a.t||"")<(b.t||"")?-1:1); });
-      var shown=g.filter(function(m){ var p=prob(m,S.market); return S.show==="all" || (p!=null && p>=thr); });
+      var shown=g.filter(function(m){ var p=prob(m,S.market);
+        if (S.show==="valor"){ var ko=oddsOf(m,oddsKey(m,S.market)); return ko ? (ko.v!=null&&ko.v>=VALUE_MIN) : !!bestValue(m); }
+        return S.show==="all" || (p!=null && p>=thr); });
       if (!shown.length) return;
       any=true;
       var sec=el("section","group");
@@ -421,7 +457,7 @@ function viewDay(main,date,kind){
       shown.forEach(function(m){ sec.appendChild(card(m,thr)); });
       list.appendChild(sec);
     });
-    if (!any) list.appendChild(el("p","empty","Nenhum jogo passa nesse filtro. Diminua a chance mínima, troque o mercado ou escolha “Todos os jogos do dia”."));
+    if (!any) list.appendChild(el("p","empty", S.show==="valor" ? "Nenhum jogo com valor (★) neste mercado. Troque o mercado ou veja mais tarde: as odds são atualizadas a cada 3 horas." : "Nenhum jogo passa nesse filtro. Diminua a chance mínima, troque o mercado ou escolha “Todos os jogos do dia”."));
   }
   render();
   main.appendChild(list);
@@ -434,6 +470,13 @@ function card(m,thr){
   var sub=el("div","sub");
   if (m.sc){ sub.appendChild(el("span","chip","Placar provável "+m.sc[0][0]+" x "+m.sc[0][1])); }
   if (S.market==="fav" && m.hda){ sub.appendChild(el("span","chip","Favorito: "+favName(m))); }
+  var ok_=oddsKey(m,S.market), oo=oddsOf(m,ok_);
+  if (oo){
+    sub.appendChild(el("span","chip","Odd "+odd(oo.best)+" · mercado "+pct(oo.p)));
+    if (oo.v!=null && oo.v>=VALUE_MIN){ var vc=el("span","chip val","★ Valor +"+Math.round(oo.v*100)+"%"); vc.title="Chance do app × melhor odd ("+oo.bk+") − 1. Estimativa estatística, não é garantia."; sub.appendChild(vc); }
+  } else if (S.show==="valor"){
+    var bv=bestValue(m); if (bv) sub.appendChild(el("span","chip val","★ Valor +"+Math.round(bv.v*100)+"% em "+ONAMES[bv.k].toLowerCase()));
+  }
   [m.hk||m.h, m.ak||m.a].forEach(function(nm,i){
     var fl=teamFlag(teamRow(m.lg,nm)); if(!fl) return;
     var c=el("span","chip "+(fl.up?"up":"down"),(fl.up?"▲ ":"▼ ")+[m.h,m.a][i]+" "+fl.text);
@@ -457,6 +500,8 @@ function card(m,thr){
     var lb=el("div","hdal");
     lb.appendChild(el("span",null,"Casa "+pct(m.hda[0]))); lb.appendChild(el("span",null,"Empate "+pct(m.hda[1]))); lb.appendChild(el("span",null,"Fora "+pct(m.hda[2])));
     d.appendChild(lb);
+    var oh=oddsOf(m,"home"), od=oddsOf(m,"draw"), oa=oddsOf(m,"away");
+    if (oh&&od&&oa) d.appendChild(el("div","mkline","Mercado: casa "+pct(oh.p)+" · empate "+pct(od.p)+" · fora "+pct(oa.p)));
   }
   if (m.fh || m.fa){
     var fr=el("div","formrow");
@@ -481,7 +526,19 @@ function card(m,thr){
     rows.push([x[0]+" x previsão", "pontos "+r.pts+" (previsto "+dec(r.xpts).replace(/,?0+$/,"")+", "+sgn(r.pts-r.xpts)+") · gols "+r.gp+" (previsto "+String(r.xgp).replace(".",",")+", "+sgn(r.gp-r.xgp)+")"]);
   });
   rows.forEach(function(x){ var s=el("div",null,x[0]+": "); s.appendChild(el("b",null,x[1])); g.appendChild(s); });
-  det.appendChild(g); d.appendChild(det);
+  det.appendChild(g);
+  if (m.odds&&m.odds.mk){
+    var wrap=el("div","tblwrap"), t=el("table","otbl"), th=el("tr");
+    ["Mercado","App","Mercado","Melhor odd","Valor"].forEach(function(x){ th.appendChild(el("th",null,x)); });
+    var thd=el("thead"); thd.appendChild(th); t.appendChild(thd); var tb=el("tbody");
+    OORDER.forEach(function(k){ var o=m.odds.mk[k]; if(!o) return; var tr=el("tr");
+      tr.appendChild(el("td",null,ONAMES[k])); tr.appendChild(el("td",null,pct(appProb(m,k)))); tr.appendChild(el("td",null,pct(o.p)));
+      var bo=el("td",null,odd(o.best)); bo.title=o.bk; tr.appendChild(bo);
+      tr.appendChild(el("td",o.v!=null&&o.v>=VALUE_MIN?"vp":"",o.v==null?"–":(o.v>0?"+":"")+Math.round(o.v*100)+"%")); tb.appendChild(tr); });
+    t.appendChild(tb); wrap.appendChild(t); det.appendChild(wrap);
+    det.appendChild(el("p","note","Odds de "+(m.odds.mk.home?m.odds.mk.home.n:"várias")+" casas, coletadas em "+m.odds.at+". “Mercado” é a chance implícita de consenso, sem a margem das casas. Valor = chance do app × melhor odd − 1: é uma estimativa estatística, não uma garantia. Jogue com responsabilidade. +18."));
+  }
+  d.appendChild(det);
   return d;
 }
 
@@ -514,7 +571,7 @@ function viewHistory(main){
 /* ================= tela: desempenho ================= */
 function perfToggle(main,active){
   var seg=el("div","seg"); seg.setAttribute("role","group"); seg.setAttribute("aria-label","Tipo de acerto");
-  [["desempenho","Previsões"],["times","Times x previsão"]].forEach(function(x){
+  [["desempenho","Previsões"],["mercado","App x Mercado"],["times","Times x previsão"]].forEach(function(x){
     var b=el("button",null,x[1]); b.type="button"; b.setAttribute("aria-pressed",String(active===x[0]));
     b.addEventListener("click",function(){ location.hash=x[0]; }); seg.appendChild(b);
   });
@@ -646,6 +703,52 @@ function viewTeams(main){
   });
   main.appendChild(list);
   var at=T[lg].at; if(at) main.appendChild(el("p","empty","Tabela calculada em "+dShort(at)+". É atualizada junto com as estatísticas da liga, a cada 6 horas em dias de jogo."));
+}
+/* ================= tela: app x mercado ================= */
+function viewMarket(main){
+  var from = S.period==="all" ? "0000" : addDays(S.today,-(+S.period));
+  var all=[]; allDays().forEach(function(d){ if(d.date>=from) d.matches.forEach(function(m){ if(hasRes(m)&&m.odds&&m.odds.mk) all.push(m); }); });
+  hero(main,"O app comparado com as odds das casas","App x Mercado",all.length,"jogos com odds e resultado no período");
+  perfToggle(main,"mercado");
+  var seg=el("div","seg");
+  [["7","7 dias"],["30","30 dias"],["90","90 dias"],["all","Tudo"]].forEach(function(x){ var b=el("button",null,x[1]); b.type="button"; b.setAttribute("aria-pressed",String(S.period===x[0]));
+    b.addEventListener("click",function(){ S.period=x[0]; route(); }); seg.appendChild(b); });
+  main.appendChild(seg);
+  if (!all.length){ main.appendChild(el("p","empty","Ainda não há jogos encerrados com odds registradas. As odds começam a ser guardadas a partir desta versão; os primeiros números aparecem um ou dois dias depois.")); return; }
+
+  // 1) quem prevê melhor: Brier (menor é melhor) por mercado
+  var sec=el("div","sect"); sec.appendChild(el("h2",null,"Quem prevê melhor?"));
+  sec.appendChild(el("p",null,"Erro médio de cada um (Brier: quanto menor, melhor). Superar o mercado é difícil: as casas são a referência mais precisa que existe."));
+  var t=table(["Mercado","Jogos","Erro do app","Erro do mercado","Melhor"]);
+  [["Resultado (casa/empate/fora)",["home","draw","away"]],["2+ gols",["o15"]],["3+ gols",["o25"]],["Ambos marcam",["by"]]].forEach(function(x){
+    var n=0, ea=0, em=0;
+    all.forEach(function(m){ var okk=x[1].every(function(k){ return oddsOf(m,k)&&appProb(m,k)!=null; }); if(!okk) return; n++;
+      x[1].forEach(function(k){ var o=outcome(m,k)?1:0; ea+=Math.pow(appProb(m,k)-o,2); em+=Math.pow(oddsOf(m,k).p-o,2); }); });
+    if (!n) return;
+    var a=ea/n, b=em/n, diff=Math.abs(a-b)/b;
+    addRow(t,[x[0],n,a.toFixed(3).replace(".",","),b.toFixed(3).replace(".",","), diff<0.005?"empate técnico":(a<b?"App":"Mercado")]);
+  });
+  sec.appendChild(t.wrap); main.appendChild(sec);
+
+  // 2) sinais de valor: simulação com 1 unidade por sinal
+  var sigs=[]; all.forEach(function(m){ Object.keys(m.odds.mk).forEach(function(k){ var o=m.odds.mk[k]; if(o.v!=null&&o.v>=VALUE_MIN&&outcome(m,k)!=null) sigs.push({m:m,k:k,o:o,win:outcome(m,k)}); }); });
+  var s2=el("div","sect"); s2.appendChild(el("h2",null,"Como foram os sinais de valor (★)"));
+  s2.appendChild(el("p",null,"Simulação: 1 unidade em cada sinal de valor, na melhor odd encontrada antes do jogo. Serve para medir o modelo, não é recomendação de aposta. Resultados de curto prazo oscilam muito; só conclua algo com centenas de sinais."));
+  if (!sigs.length){ s2.appendChild(el("p","empty","Nenhum sinal de valor com resultado no período.")); main.appendChild(s2); return; }
+  var k2=el("div","kpis");
+  var won=sigs.filter(function(x){return x.win;}).length, profit=sigs.reduce(function(a,x){ return a+(x.win?x.o.best-1:-1); },0);
+  var avgOdd=sigs.reduce(function(a,x){return a+x.o.best;},0)/sigs.length;
+  [["Sinais",String(sigs.length),"com resultado no período"],["Acertos",pct(won/sigs.length),won+" de "+sigs.length+" · odd média "+odd(avgOdd)],
+   ["Retorno simulado",(profit>=0?"+":"")+(Math.round(profit*10)/10).toFixed(1).replace(".",",")+" u",(profit>=0?"+":"")+(profit/sigs.length*100).toFixed(1).replace(".",",")+"% por unidade"]].forEach(function(x){
+    var c=el("div","kpi"); c.appendChild(el("h3",null,x[0])); c.appendChild(el("div","big",x[1])); c.appendChild(el("p",null,x[2])); k2.appendChild(c); });
+  s2.appendChild(k2);
+  var t2=table(["Mercado","Sinais","Acertos","Retorno"]);
+  OORDER.forEach(function(k){ var g=sigs.filter(function(x){return x.k===k;}); if(!g.length) return;
+    var w=g.filter(function(x){return x.win;}).length, pr=g.reduce(function(a,x){ return a+(x.win?x.o.best-1:-1); },0);
+    addRow(t2,[ONAMES[k],g.length,Math.round(w/g.length*100)+"%",(pr>=0?"+":"")+pr.toFixed(1).replace(".",",")+" u"]); });
+  s2.appendChild(t2.wrap);
+  s2.appendChild(el("p","note","Jogue com responsabilidade. Apostas envolvem risco de perda. Proibido para menores de 18 anos."));
+  main.appendChild(s2);
 }
 function table(head){
   var wrap=el("div","tblwrap"), t=el("table"), th=el("thead"), tr=el("tr");
@@ -794,7 +897,9 @@ function viewSettings(main){
      ["Competições com jogos", dg.leagues_found&&dg.leagues_found.length ? dg.leagues_found.join(", ") : "nenhuma"],
      ["Competições calculadas", dg.leagues_ok&&dg.leagues_ok.length ? dg.leagues_ok.join(", ") : "nenhuma"],
      ["Competições com falha", dg.leagues_fail&&dg.leagues_fail.length ? dg.leagues_fail.join(", ") : "nenhuma"],
-     ["Previsões calculadas", String(dg.updated)]].forEach(function(x){ kv2.appendChild(el("span",null,x[0])); kv2.appendChild(el("b",null,x[1])); });
+     ["Previsões calculadas", String(dg.updated)],
+     ["Jogos com odds", dg.odds_matches==null?"–":String(dg.odds_matches)],
+     ["Ligas sem odds (falha)", dg.odds_fail&&dg.odds_fail.length ? dg.odds_fail.join(", ") : "nenhuma"]].forEach(function(x){ kv2.appendChild(el("span",null,x[0])); kv2.appendChild(el("b",null,x[1])); });
     c3.appendChild(kv2);
     if (dg.fail_reason) c3.appendChild(el("p","err","Motivo: "+dg.fail_reason));
   }
@@ -804,6 +909,7 @@ function viewSettings(main){
   var c4=el("section","card"); c4.appendChild(el("h2",null,"Como as previsões são feitas"));
   ["Cada time recebe uma força de ataque e de defesa calculada com os gols da temporada na competição, separando jogos em casa e fora. Com poucos jogos, os números são puxados para a média da liga, para evitar exageros.",
    "Forma recente: além da temporada atual, o app usa a temporada anterior, e cada jogo vale menos conforme envelhece (um jogo de um ano atrás vale metade de um de hoje). Esse ajuste foi escolhido testando 22 temporadas reais de 8 ligas: melhorou todas as previsões, principalmente no começo das temporadas. Os quadradinhos V, E e D mostram os 5 últimos resultados de cada time.",
+   "Odds e valor: o app busca as odds de várias casas a cada 3 horas, remove a margem de cada uma e usa a mediana como “chance do mercado”. Quando a chance do app vezes a melhor odd encontrada passa de 1,05, o jogo ganha a estrela ★ de valor. As odds ficam congeladas no apito inicial, e a aba Acertos → App x Mercado mostra, com honestidade, quem prevê melhor e como teriam ido os sinais.",
    "Calibração: testes com milhares de jogos mostraram que modelos desse tipo exageram a diferença entre jogos de muitos e de poucos gols. Por isso, o total de gols esperado é puxado 19% em direção à média da liga, o que deixou as chances de 2+, 3+ gols e ambos marcam mais próximas do que acontece de verdade.",
    "Com isso o app estima quantos gols cada time deve marcar e calcula a chance de cada placar possível (de 0x0 a 10x10). Uma correção estatística conhecida como Dixon-Coles ajusta a frequência de placares baixos, como 0x0 e 1x1.",
    "Todas as chances saem dessa tabela de placares: vitória, empate, derrota, número de gols e ambos marcam. A previsão de cada jogo fica congelada quando a bola rola, e a aba Acertos compara tudo com o placar real, sem retoques.",
