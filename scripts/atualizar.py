@@ -27,6 +27,9 @@ HIST_DIR = os.path.join(DOCS, "history")
 RECENT_DAYS = 14          # dias mantidos com todos os detalhes em data.json
 STATS_MAX_AGE_H = 6       # estatísticas de liga renovadas a cada 6 horas
 RHO = -0.08               # correção de Dixon-Coles para placares baixos
+FORM_HALF_LIFE_DAYS = 365 # forma recente: um jogo de 1 ano atrás vale metade de um jogo de hoje
+PREV_SEASON_MAX_AGE_D = 30  # jogos da temporada anterior: buscados de novo a cada 30 dias
+# (meia-vida e uso da temporada anterior escolhidos por teste em 22 temporadas reais, 6.846 jogos)
 
 # ---------------------------------------------------------------------------
 # Competições. af = id na API-Football; country/names = plano B para achar a liga pelo nome;
@@ -91,14 +94,37 @@ def log(*a):
 # ---------------------------------------------------------------------------
 # Modelo
 # ---------------------------------------------------------------------------
-def build_stats(rows):
-    """rows = (mandante, visitante, gols_m, gols_v). Por time: [J, GP, GC, Jc, GPc, GCc, Jf, GPf, GCf]."""
-    t, gh, ga = {}, 0, 0
-    for h, a, x, y in rows:
-        s = t.setdefault(h, [0] * 9); s[0] += 1; s[1] += x; s[2] += y; s[3] += 1; s[4] += x; s[5] += y
-        s = t.setdefault(a, [0] * 9); s[0] += 1; s[1] += y; s[2] += x; s[6] += 1; s[7] += y; s[8] += x
+def _days(a, b):
+    """Dias entre duas datas ISO (só a parte AAAA-MM-DD importa)."""
+    return (datetime.strptime(a[:10], "%Y-%m-%d") - datetime.strptime(b[:10], "%Y-%m-%d")).days
+
+
+def build_stats(rows, ref=None, half_life=None):
+    """rows = (mandante, visitante, gols_m, gols_v, data ISO).
+    Por time: r = contagens reais [J, GP, GC, Jc, GPc, GCc, Jf, GPf, GCf];
+              w = as mesmas contagens com peso maior para jogos recentes (forma recente);
+              f = últimos 5 resultados (V/E/D, do mais antigo ao mais recente)."""
+    half_life = FORM_HALF_LIFE_DAYS if half_life is None else half_life
+    ref = ref or max((r[4] for r in rows if len(r) > 4 and r[4]), default=None)
+    t, gh, ga, hist = {}, 0, 0, {}
+    for row in rows:
+        h, a, x, y = row[:4]
+        d = row[4] if len(row) > 4 else None
+        wt = 1.0
+        if half_life and ref and d:
+            wt = 0.5 ** (max(0, _days(ref, d)) / half_life)
+        for team, gf, gc, home in ((h, x, y, True), (a, y, x, False)):
+            e = t.setdefault(team, {"r": [0] * 9, "w": [0.0] * 9})
+            idx = (0, 1, 2, 3, 4, 5) if home else (0, 1, 2, 6, 7, 8)
+            for arr, inc in ((e["r"], 1), (e["w"], wt)):
+                arr[idx[0]] += inc; arr[idx[1]] += gf * inc; arr[idx[2]] += gc * inc
+                arr[idx[3]] += inc; arr[idx[4]] += gf * inc; arr[idx[5]] += gc * inc
+            hist.setdefault(team, []).append((d or "", "V" if gf > gc else ("E" if gf == gc else "D")))
         gh += x; ga += y
-    return dict(teams=t, n=len(rows), gh=gh, ga=ga)
+    for team, e in t.items():
+        e["w"] = [round(v, 3) for v in e["w"]]
+        e["f"] = "".join(r for _, r in sorted(hist[team])[-5:])
+    return dict(teams=t, n=len(rows), gh=gh, ga=ga, v=2)
 
 
 def league_means(key, st):
@@ -114,8 +140,9 @@ def predict(key, st, home, away):
     muH, muA = league_means(key, st)
     mu = (muH + muA) / 2
     k = 6 if LEAGUES[key]["cup"] else 5
-    z = [0] * 9
-    s, v = st["teams"].get(home, z), st["teams"].get(away, z)
+    empty = {"r": [0] * 9, "w": [0] * 9, "f": ""}
+    th, ta = st["teams"].get(home, empty), st["teams"].get(away, empty)
+    s, v = th["w"], ta["w"]          # contagens com forma recente
     r = lambda x, g, m: (x + k * m) / (g + k) / m
     att_h = math.sqrt(r(s[1], s[0], mu) * r(s[4], s[3], muH))
     def_h = math.sqrt(r(s[2], s[0], mu) * r(s[5], s[3], muA))
@@ -123,7 +150,7 @@ def predict(key, st, home, away):
     def_a = math.sqrt(r(v[2], v[0], mu) * r(v[8], v[6], muH))
     lh = min(5.0, max(0.15, muH * att_h * def_a))
     la = min(5.0, max(0.15, muA * att_a * def_h))
-    return dict(score_model(lh, la), sh=s[:3], sa=v[:3])
+    return dict(score_model(lh, la), sh=th.get("c", th["r"][:3]), sa=ta.get("c", ta["r"][:3]), fh=th.get("f", ""), fa=ta.get("f", ""))
 
 
 def score_model(lh, la, N=10):
@@ -210,12 +237,12 @@ class APIFootball:
                             h=f["teams"]["home"]["name"], a=f["teams"]["away"]["name"], res=res))
         return out
 
-    def finished_in(self, f):
+    def finished_in(self, f, season=None):
         rows = []
-        for x in self.get("/fixtures", league=f["lid"], season=f["season"], status="FT-AET-PEN"):
+        for x in self.get("/fixtures", league=f["lid"], season=season or f["season"], status="FT-AET-PEN"):
             ft = (x.get("score") or {}).get("fulltime") or {}
             if ft.get("home") is not None:
-                rows.append((x["teams"]["home"]["name"], x["teams"]["away"]["name"], ft["home"], ft["away"]))
+                rows.append((x["teams"]["home"]["name"], x["teams"]["away"]["name"], ft["home"], ft["away"], x["fixture"]["date"]))
         return rows
 
 
@@ -262,9 +289,12 @@ class FootballData:
                             ko=ko.isoformat(), h=m["homeTeam"]["name"], a=m["awayTeam"]["name"], res=res))
         return out
 
-    def finished_in(self, f):
-        js = self.get("/competitions/%s/matches" % f["lid"], status="FINISHED")
-        return [(m["homeTeam"]["name"], m["awayTeam"]["name"], *self.score(m)) for m in js.get("matches", []) if self.score(m)]
+    def finished_in(self, f, season=None):
+        q = {"status": "FINISHED"}
+        if season:
+            q["season"] = season
+        js = self.get("/competitions/%s/matches" % f["lid"], **q)
+        return [(m["homeTeam"]["name"], m["awayTeam"]["name"], *self.score(m), m.get("utcDate", "")) for m in js.get("matches", []) if self.score(m)]
 
 
 # ---------------------------------------------------------------------------
@@ -433,25 +463,45 @@ def main():
     for f in {(f["lg"], f["season"]): f for d in new_dates for f in fx[d]}.values():
         ck = "%s|%s" % (f["lg"], f["season"])
         c = cache.get(ck)
-        fresh = c and (now - datetime.fromisoformat(c["at"])).total_seconds() < STATS_MAX_AGE_H * 3600
+        fresh = c and c.get("st", {}).get("v") == 2 and (now - datetime.fromisoformat(c["at"])).total_seconds() < STATS_MAX_AGE_H * 3600
         if fresh and not force:
             stats[f["lg"]] = c["st"]; continue
+        prev_rows = []
+        pk = "prev|%s|%s" % (f["lg"], f["season"])
+        pc = cache.get(pk)
+        if pc and (now - datetime.fromisoformat(pc["at"])).days < PREV_SEASON_MAX_AGE_D:
+            prev_rows = [tuple(r) for r in pc["rows"]]
+        else:
+            try:
+                prev_rows = prov.finished_in(f, season=int(f["season"]) - 1)
+                cache[pk] = {"at": now.isoformat(), "rows": [list(r) for r in prev_rows]}
+                log("%-32s %4d jogos da temporada anterior" % (LEAGUES[f["lg"]]["name"], len(prev_rows)))
+            except ProviderError as e:
+                log("Aviso: sem temporada anterior de %s (segue só com a atual) -> %s" % (LEAGUES[f["lg"]]["name"], str(e)[:120]))
+                if pc:
+                    prev_rows = [tuple(r) for r in pc["rows"]]
         try:
-            st = build_stats(prov.finished_in(f))
+            cur_rows = prov.finished_in(f)
+            st = build_stats(prev_rows + cur_rows, ref=now.isoformat())
+            cur_only = build_stats(cur_rows, half_life=0)["teams"]
+            for team, e in st["teams"].items():
+                e["c"] = cur_only.get(team, {"r": [0, 0, 0]})["r"][:3]   # só a temporada atual, para exibir
+            st["n_cur"] = len(cur_rows)
+            st["obs_cur"] = round(sum(r[2] + r[3] for r in cur_rows) / len(cur_rows), 2) if cur_rows else None
         except ProviderError as e:
             log("AVISO: sem estatísticas de %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
             fails.append((LEAGUES[f["lg"]]["name"], str(e)))
-            if c:
+            if c and c.get("st", {}).get("v") == 2:
                 stats[f["lg"]] = c["st"]
             continue
         stats[f["lg"]] = st
         cache[ck] = {"at": now.isoformat(), "st": st}
-        log("%-32s %4d jogos na temporada" % (LEAGUES[f["lg"]]["name"], st["n"]))
+        log("%-32s %4d jogos na temporada atual" % (LEAGUES[f["lg"]]["name"], st.get("n_cur", st["n"])))
     for key, st in stats.items():
         muH, muA = league_means(key, st)
         data["leagues"][key] = dict(name=LEAGUES[key]["name"], group=LEAGUES[key]["group"],
-                                    obs=round((st["gh"] + st["ga"]) / st["n"], 2) if st["n"] else None,
-                                    mu=round(muH + muA, 2), n=st["n"])
+                                    obs=st.get("obs_cur") or (round((st["gh"] + st["ga"]) / st["n"], 2) if st["n"] else None),
+                                    mu=round(muH + muA, 2), n=st.get("n_cur", st["n"]))
 
     # 3) jogos de hoje e amanhã
     added = upd = 0
@@ -478,7 +528,8 @@ def main():
     archive(data)
 
     cut = (now - timedelta(days=3)).isoformat()
-    cache = {k: v for k, v in cache.items() if v["at"] >= cut}
+    cut_prev = (now - timedelta(days=PREV_SEASON_MAX_AGE_D + 5)).isoformat()
+    cache = {k: v for k, v in cache.items() if v["at"] >= (cut_prev if k.startswith("prev|") else cut)}
     found = {d: len(fx.get(d, [])) for d in new_dates}
     leagues_found = sorted({LEAGUES[f["lg"]]["name"] for d in new_dates for f in fx.get(d, [])})
     data["diag"] = dict(plan=getattr(prov, "plan", None), req=getattr(prov, "req", None),
