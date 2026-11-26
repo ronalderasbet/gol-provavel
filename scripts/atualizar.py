@@ -31,6 +31,9 @@ FORM_HALF_LIFE_DAYS = 365 # forma recente: um jogo de 1 ano atrás vale metade d
 PREV_SEASON_MAX_AGE_D = 30  # jogos da temporada anterior: buscados de novo a cada 30 dias
 ODDS_MAX_AGE_H = 3        # odds: a API atualiza a cada 3 horas; buscamos no mesmo ritmo
 VALUE_MIN = 0.05          # destaque de "valor" a partir de +5% (chance do app × melhor odd − 1)
+INJ_MAX_AGE_H = 3         # desfalques: renovados a cada 3 horas
+PLAYER_MAX_AGE_D = 7      # estatísticas de jogadores desfalcados: renovadas a cada 7 dias
+PLAYER_CALLS_MAX = 150    # teto de consultas de jogadores por execução (protege a cota)
 GOALS_SHRINK = 0.19       # puxa o total de gols esperado 19% para a média da liga (corrige excesso de confiança
                           # nos mercados de gols; ajustado em 2024-25 e confirmado em 2025-26, 4.706 jogos)
 # (meia-vida e uso da temporada anterior escolhidos por teste em 22 temporadas reais, 6.846 jogos)
@@ -228,6 +231,42 @@ def attach_value(m):
         o["v"] = None if pm is None else round(pm * o["best"] - 1, 4)
 
 
+def player_importance(pl, team_stats):
+    """Importância de um jogador para o time, a partir das estatísticas da temporada.
+    att = parcela dos gols do time ligados a ele (gols + meia assistência); reg = titular frequente."""
+    j, gp = (team_stats or [0, 0, 0])[0], (team_stats or [0, 0, 0])[1]
+    mins = pl.get("min", 0)
+    reg = j > 0 and mins >= 0.5 * 90 * j
+    att = (pl.get("g", 0) + 0.5 * pl.get("a", 0)) / (1.35 * gp) if gp > 0 else 0.0
+    return round(min(0.5, att), 3), bool(reg)
+
+
+def injury_adjust(m, inj, stats_lg):
+    """Previsão experimental com desfalques. Regras conservadoras (o reserva recupera metade do que se perde):
+    ataque do time cai metade da parcela de gols dos ausentes (máx. −25%);
+    cada titular frequente de defesa ausente aumenta os gols do adversário em 5% (goleiro: 8%; máx. +20%).
+    'Questionable' (dúvida) conta pela metade."""
+    if not inj or "lh" not in m:
+        return None
+    factors = {}
+    for side in ("h", "a"):
+        att_loss, def_loss = 0.0, 0.0
+        for p in inj.get(side, []):
+            w = 1.0 if p.get("t") == "M" else 0.5
+            att_loss += w * p.get("att", 0)
+            if p.get("reg"):
+                if p.get("pos") == "G":
+                    def_loss += w * 0.08
+                elif p.get("pos") == "D":
+                    def_loss += w * 0.05
+        factors[side] = (max(0.75, 1 - 0.5 * att_loss), min(1.20, 1 + def_loss))
+    lh = m["lh"] * factors["h"][0] * factors["a"][1]
+    la = m["la"] * factors["a"][0] * factors["h"][1]
+    if abs(lh - m["lh"]) < 1e-4 and abs(la - m["la"]) < 1e-4:
+        return None
+    return score_model(min(5.0, max(0.15, lh)), min(5.0, max(0.15, la)))
+
+
 def team_table(key, prev_rows, cur_rows):
     """Simulação da temporada: para cada jogo já encerrado, calcula o que o modelo teria previsto
     usando só os jogos anteriores a ele, e compara com o que aconteceu, time por time."""
@@ -269,11 +308,15 @@ def score_model(lh, la, N=10):
     P = lambda f: sum(p for p, i, j in cells if f(i, j))
     top = sorted(cells, reverse=True)[:3]
     R = lambda x: round(x, 4)
+    hda = [P(lambda i, j: i > j), P(lambda i, j: i == j), P(lambda i, j: i < j)]
+    fav = max(range(3), key=lambda k: hda[k])
+    inside = {0: lambda i, j: i > j, 1: lambda i, j: i == j, 2: lambda i, j: i < j}[fav]
+    sug = max(c for c in cells if inside(c[1], c[2]))   # placar sugerido: o mais provável dentro do resultado favorito
     return dict(lh=round(lh, 3), la=round(la, 3),
                 p1=R(P(lambda i, j: i + j >= 1)), p2=R(P(lambda i, j: i + j >= 2)), p3=R(P(lambda i, j: i + j >= 3)),
                 btts=R(P(lambda i, j: i >= 1 and j >= 1)),
                 hda=[R(P(lambda i, j: i > j)), R(P(lambda i, j: i == j)), R(P(lambda i, j: i < j))],
-                sc=[[i, j, R(p)] for p, i, j in top])
+                sc=[[i, j, R(p)] for p, i, j in top], sg=[sug[1], sug[2], R(sug[0])])
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +384,30 @@ class APIFootball:
             out.append(dict(fid="af%d" % f["fixture"]["id"], lg=key, lid=lg["id"], season=lg["season"], ko=f["fixture"]["date"],
                             h=f["teams"]["home"]["name"], a=f["teams"]["away"]["name"], res=res))
         return out
+
+    def injuries(self, fids):
+        """Desfalques de até 20 jogos por chamada: {fid: [{id, name, team, type, reason}]}."""
+        out = {f: [] for f in fids}
+        for i in range(0, len(fids), 20):
+            chunk = fids[i:i + 20]
+            for it in self.get("/injuries", ids="-".join(f[2:] for f in chunk)):
+                fid = "af%s" % (it.get("fixture") or {}).get("id")
+                pl = it.get("player") or {}
+                if fid in out and pl.get("id"):
+                    out[fid].append(dict(id=pl["id"], name=pl.get("name") or "", team=(it.get("team") or {}).get("name") or "",
+                                         type=pl.get("type") or "", reason=pl.get("reason") or ""))
+        return out
+
+    def player_season(self, pid, season, lid):
+        """Gols, assistências, minutos e posição do jogador na competição (ou na temporada toda)."""
+        resp = self.get("/players", id=pid, season=season)
+        stats = (resp[0].get("statistics") if resp else None) or []
+        same = [x for x in stats if (x.get("league") or {}).get("id") == lid] or stats
+        g = sum(((x.get("goals") or {}).get("total") or 0) for x in same)
+        a = sum(((x.get("goals") or {}).get("assists") or 0) for x in same)
+        mins = sum(((x.get("games") or {}).get("minutes") or 0) for x in same)
+        pos = next(((x.get("games") or {}).get("position") for x in same if (x.get("games") or {}).get("position")), "") or ""
+        return dict(g=g, a=a, min=mins, pos=pos[:1].upper())
 
     def odds_league(self, lid, season, max_pages=6):
         """Odds pré-jogo dos próximos jogos de uma liga: {fid: {mercado: {...}}}."""
@@ -516,7 +583,7 @@ def link(existing, f):
     return best if score >= 0.6 else None
 
 
-COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "odds")
+COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj")
 
 
 def archive(data):
@@ -684,6 +751,58 @@ def main():
                 attach_value(m)
     log("Odds: %d jogos com odds · ligas: %s" % (with_odds, ", ".join(odds_ok) or "nenhuma"))
 
+    # 5) desfalques (experimental: previsão paralela "com desfalques", medida na aba Acertos)
+    with_inj, inj_err = 0, None
+    if hasattr(prov, "injuries"):
+        up = [m for d in new_dates for m in find_day(data, d)["matches"]
+              if str(m.get("fid", "")).startswith("af") and m.get("ko") and datetime.fromisoformat(m["ko"]) > now]
+        stale = [m["fid"] for m in up if not (cache.get("inj|" + m["fid"]) and
+                 (now - datetime.fromisoformat(cache["inj|" + m["fid"]]["at"])).total_seconds() < INJ_MAX_AGE_H * 3600)]
+        try:
+            if stale:
+                got = prov.injuries(stale)
+                for fid, lst in got.items():
+                    cache["inj|" + fid] = {"at": now.isoformat(), "list": lst}
+        except ProviderError as e:
+            inj_err = str(e)[:150]; log("Aviso: sem desfalques -> %s" % inj_err)
+        pcalls = 0
+        season_of = {f["fid"]: (f["season"], f["lid"]) for d in new_dates for f in fx[d]}
+        for m in up:
+            ce = cache.get("inj|" + m["fid"])
+            if not ce or m["fid"] not in season_of:
+                continue
+            season, lid = season_of[m["fid"]]
+            st = stats.get(m["lg"])
+            inj = {"h": [], "a": []}
+            for p in ce["list"]:
+                side = "h" if sim(p["team"], m.get("hk", m["h"])) >= sim(p["team"], m.get("ak", m["a"])) else "a"
+                pk = "pl|%s|%s" % (p["id"], season)
+                pc = cache.get(pk)
+                if not (pc and (now - datetime.fromisoformat(pc["at"])).days < PLAYER_MAX_AGE_D) and pcalls < PLAYER_CALLS_MAX:
+                    try:
+                        pc = {"at": now.isoformat(), "s": prov.player_season(p["id"], season, lid)}
+                        cache[pk] = pc; pcalls += 1
+                    except ProviderError:
+                        pc = None
+                ps = (pc or {}).get("s") or {}
+                tname = m.get("hk", m["h"]) if side == "h" else m.get("ak", m["a"])
+                tstats = st["teams"].get(tname, {}).get("c") if st else None
+                att, reg = player_importance(ps, tstats)
+                inj[side].append(dict(n=p["name"], t="M" if p["type"].lower().startswith("missing") else "Q",
+                                      r=p["reason"], pos=ps.get("pos", ""), att=att, reg=reg,
+                                      g=ps.get("g", 0), a=ps.get("a", 0)))
+            for side in ("h", "a"):
+                inj[side].sort(key=lambda x: (-x["att"], not x["reg"]))
+            m["inj"] = inj if (inj["h"] or inj["a"]) else None
+            adj = injury_adjust(m, m["inj"], st)
+            if adj:
+                m["adj"] = {k: adj[k] for k in ("lh", "la", "p1", "p2", "p3", "btts", "hda", "sc", "sg")}
+            else:
+                m.pop("adj", None)
+            if m["inj"]:
+                with_inj += 1
+        log("Desfalques: %d jogos com desfalques · %d consultas de jogadores" % (with_inj, pcalls))
+
     for d in data["days"]:
         d["matches"] = sorted([m for m in d["matches"] if "p1" in m], key=lambda m: (m.get("t", ""), m["h"]))
     data["days"] = sorted([d for d in data["days"] if d["matches"]], key=lambda d: d["date"])
@@ -693,14 +812,17 @@ def main():
     data["teams"] = {k: v for k, v in data.get("teams", {}).items() if v.get("at", "") >= old_t}
     cut = (now - timedelta(days=3)).isoformat()
     cut_prev = (now - timedelta(days=PREV_SEASON_MAX_AGE_D + 5)).isoformat()
-    cache = {k: v for k, v in cache.items() if v["at"] >= (cut_prev if k.startswith("prev|") else cut)}
+    cut_pl = (now - timedelta(days=PLAYER_MAX_AGE_D + 1)).isoformat()
+    cache = {k: v for k, v in cache.items()
+             if v["at"] >= (cut_prev if k.startswith("prev|") else cut_pl if k.startswith("pl|") else cut)}
     found = {d: len(fx.get(d, [])) for d in new_dates}
     leagues_found = sorted({LEAGUES[f["lg"]]["name"] for d in new_dates for f in fx.get(d, [])})
     data["diag"] = dict(plan=getattr(prov, "plan", None), req=getattr(prov, "req", None),
                         found_today=found[new_dates[0]], found_tomorrow=found[new_dates[1]],
                         leagues_found=leagues_found, leagues_ok=sorted(LEAGUES[k]["name"] for k in stats),
                         leagues_fail=[n for n, _ in fails], fail_reason=friendly([fails[0][1]]) if fails else None,
-                        added=added, updated=upd, odds_matches=with_odds, odds_fail=odds_fail)
+                        added=added, updated=upd, odds_matches=with_odds, odds_fail=odds_fail,
+                        inj_matches=with_inj, inj_error=inj_err)
     data.pop("warning", None)
     if sum(found.values()) and not stats:
         data["error"] = friendly([fails[0][1]]) if fails else "Os jogos foram encontrados, mas não consegui as estatísticas das competições."
