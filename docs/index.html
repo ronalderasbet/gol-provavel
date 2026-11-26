@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gol Provável</title>
+<meta name="description" content="Previsões de placar e de gols para as principais ligas do mundo, com histórico de acertos.">
+<meta name="theme-color" content="#1d5c3f">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gol Provável">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f3f6f1; --surface:#ffffff; --ink:#13261d; --muted:#56695e; --line:#d6dfd7;
+  --pitch:#1d5c3f; --pitch-soft:#e3eee6; --accent:#d9a800; --miss:#b9c4bc; --bad:#b3412e; --good:#1d7a4c;
+  --draw:#8a9a90; --away:#3f6fa0;
+  color-scheme:light; box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0c1f17; --surface:#122a20; --ink:#e7efe9; --muted:#97ac9f; --line:#24412f;
+    --pitch:#46a173; --pitch-soft:#173628; --accent:#f2c94c; --miss:#3a5446; --bad:#e2735e; --good:#5cc28c;
+    --draw:#7d9187; --away:#6d9bd0; color-scheme:dark;
+  }
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Barlow",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:16px;line-height:1.5;-webkit-text-size-adjust:100%}
+h1,h2,h3{font-family:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;margin:0;line-height:1.05}
+button,select,input{font:inherit;color:inherit}
+a{color:var(--pitch)}
+button:focus-visible,select:focus-visible,input:focus-visible,summary:focus-visible,a:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.wrap{max-width:920px;margin:0 auto;padding:0 1rem calc(6.5rem + env(safe-area-inset-bottom,0px))}
+
+/* topo */
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--bg);z-index:10}
+.top .in{max-width:920px;margin:0 auto;padding:.6rem 1rem;display:flex;align-items:center;gap:.8rem}
+.logo{width:40px;height:40px;flex:none}
+.brand{flex:1;min-width:0}
+.brand b{font-family:"Barlow Condensed",sans-serif;font-size:1.5rem;font-weight:800;letter-spacing:-.01em;display:block;line-height:1}
+.brand small{color:var(--muted);font-size:.82rem;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.btn{border:0;border-radius:10px;padding:.6rem 1rem;font-weight:600;cursor:pointer;background:var(--pitch);color:#fff;display:inline-flex;align-items:center;gap:.45rem;text-decoration:none}
+.btn.ghost{background:transparent;color:var(--pitch);border:1.5px solid var(--pitch)}
+.btn:disabled{opacity:.6;cursor:wait}
+.btn svg{width:18px;height:18px;flex:none}
+.spin svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.banner{max-width:920px;margin:.8rem auto 0;padding:.7rem 1rem;border-radius:10px;background:var(--pitch-soft);font-size:.92rem}
+.banner[hidden]{display:none}
+
+/* navegação inferior */
+nav.bottom{position:fixed;left:0;right:0;bottom:0;z-index:6;background:var(--surface);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+nav.bottom .in{max-width:920px;margin:0 auto;display:grid;grid-template-columns:repeat(5,1fr)}
+nav.bottom a{display:flex;flex-direction:column;align-items:center;gap:.1rem;padding:.5rem .2rem .55rem;text-decoration:none;color:var(--muted);font-size:.78rem;font-weight:600}
+nav.bottom a svg{width:22px;height:22px}
+nav.bottom a[aria-current="page"]{color:var(--pitch)}
+
+/* cabeçalho de página */
+.hero{padding:1.4rem 0 1rem}
+.hero .date{color:var(--muted);font-weight:500;margin:0 0 .2rem}
+.hero h1{font-size:clamp(2.1rem,7vw,3.4rem);font-weight:800;letter-spacing:-.01em}
+.tally{display:flex;align-items:baseline;gap:.6rem;margin-top:.7rem;flex-wrap:wrap}
+.tally b{font-family:"Barlow Condensed",sans-serif;font-size:clamp(2.6rem,9vw,4rem);line-height:.9;font-weight:800;color:var(--pitch)}
+.tally span{color:var(--muted);max-width:34ch}
+
+/* filtros */
+.filters{display:grid;gap:.8rem;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));padding:.9rem 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.filters label{display:block;font-weight:600;font-size:.88rem;margin-bottom:.3rem}
+select,input[type=search],input[type=text],input[type=password]{width:100%;padding:.55rem .6rem;border:1.5px solid var(--line);border-radius:8px;background:var(--surface)}
+input[type=range]{width:100%;accent-color:var(--pitch)}
+.thr{display:flex;justify-content:space-between;font-size:.82rem;color:var(--muted)}
+.thr output{font-family:"Barlow Condensed",sans-serif;font-size:1.25rem;font-weight:700;color:var(--ink)}
+
+/* jogos */
+.group{margin-top:1.4rem}
+.group h2{font-size:1.4rem;font-weight:700}
+.group .src{color:var(--muted);font-size:.85rem;margin:.15rem 0 .4rem}
+.match{border-top:1px solid var(--line);padding:.85rem 0}
+.match:last-child{border-bottom:1px solid var(--line)}
+.row{display:grid;grid-template-columns:3.3rem 1fr auto;gap:.7rem;align-items:center}
+.time{font-family:"Barlow Condensed",sans-serif;font-weight:600;font-size:1.1rem;color:var(--muted)}
+.teams{font-weight:600;font-size:1.03rem;line-height:1.25;min-width:0}
+.teams .sub{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.3rem;font-weight:500;font-size:.82rem;color:var(--muted)}
+.chip{display:inline-flex;align-items:center;gap:.25rem;border-radius:6px;padding:.05rem .45rem;background:var(--pitch-soft);color:var(--ink);font-weight:600}
+.chip.res{background:transparent;border:1.5px solid currentColor;font-family:"Barlow Condensed",sans-serif;font-size:.95rem}
+.chip.hit{color:var(--good)} .chip.miss{color:var(--bad)}
+.pct{font-family:"Barlow Condensed",sans-serif;font-weight:800;font-size:2rem;line-height:1;text-align:right;min-width:4.4ch}
+.pct small{display:block;font-size:.72rem;font-weight:600;color:var(--muted);font-family:"Barlow",sans-serif}
+.pct.no{color:var(--muted)}
+.hda{display:flex;height:8px;border-radius:4px;overflow:hidden;margin:.55rem 0 0 4rem;background:var(--pitch-soft)}
+.hda i{display:block;height:100%}
+.hda i:nth-child(1){background:var(--pitch)} .hda i:nth-child(2){background:var(--draw)} .hda i:nth-child(3){background:var(--away)}
+.hdal{display:flex;justify-content:space-between;margin:.2rem 0 0 4rem;font-size:.78rem;color:var(--muted)}
+details{margin:.45rem 0 0 4rem}
+summary{cursor:pointer;color:var(--pitch);font-weight:600;font-size:.88rem;list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"+ "} details[open] summary::before{content:"− "}
+.det{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.25rem 1.2rem;font-size:.88rem;padding:.5rem 0 .2rem;color:var(--muted)}
+.det b{color:var(--ink);font-weight:600}
+.empty{padding:1.2rem 0;color:var(--muted)}
+
+/* histórico e desempenho */
+.list a{display:grid;grid-template-columns:1fr auto;gap:.5rem;align-items:center;padding:.8rem 0;border-bottom:1px solid var(--line);text-decoration:none;color:inherit}
+.list a b{font-weight:600}
+.list a span{color:var(--muted);font-size:.88rem}
+.list a .rate{font-family:"Barlow Condensed",sans-serif;font-size:1.6rem;font-weight:800;text-align:right}
+.seg{display:flex;flex-wrap:wrap;gap:.4rem;margin:.6rem 0}
+.seg button{border:1.5px solid var(--line);background:var(--surface);border-radius:999px;padding:.35rem .85rem;font-weight:600;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--pitch);color:#fff;border-color:var(--pitch)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-top:1rem}
+.kpi{border-top:3px solid var(--pitch);padding-top:.55rem}
+.kpi h3{font-size:1.2rem;font-weight:700}
+.kpi .big{font-family:"Barlow Condensed",sans-serif;font-size:2.8rem;font-weight:800;line-height:1}
+.kpi p{margin:.2rem 0;color:var(--muted);font-size:.9rem}
+.sect{margin-top:1.8rem}
+.sect h2{font-size:1.45rem}
+.sect>p{color:var(--muted);margin:.3rem 0 0;max-width:70ch;font-size:.94rem}
+.tblwrap{overflow-x:auto;margin-top:.6rem}
+table{border-collapse:collapse;width:100%;font-size:.9rem;min-width:460px}
+th,td{text-align:right;padding:.45rem .5rem;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th{font-weight:600;color:var(--muted)}
+
+/* ajustes */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:1.1rem;margin-top:1rem}
+.card h2{font-size:1.4rem;margin-bottom:.3rem}
+.card p{margin:.4rem 0;color:var(--muted);font-size:.94rem;max-width:68ch}
+.card ol{margin:.6rem 0;padding-left:1.3rem;font-size:.95rem}
+.card ol li{margin:.35rem 0}
+.card .actions{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.8rem}
+.ok{color:var(--good);font-weight:600} .err{color:var(--bad);font-weight:600}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:.3rem 1rem;font-size:.92rem}
+.kv span{color:var(--muted)}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(5.2rem + env(safe-area-inset-bottom,0px));z-index:8;background:var(--ink);color:var(--bg);padding:.65rem 1rem;border-radius:10px;font-size:.92rem;max-width:min(92vw,520px);box-shadow:0 4px 18px rgba(0,0,0,.25)}
+.toast[hidden]{display:none}
+[hidden]{display:none!important}
+@media (max-width:520px){
+  .row{grid-template-columns:2.9rem 1fr auto;gap:.55rem}
+  .hda,.hdal,details{margin-left:3.45rem}
+  .pct{font-size:1.75rem}
+  .btn .lbl{display:none}
+}
+@media (prefers-reduced-motion:reduce){ .spin svg{animation:none} }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="in">
+    <svg xmlns="http://www.w3.org/2000/svg" class="logo" aria-hidden="true" viewBox="0 0 1024 1024"><defs><radialGradient id="lg-bg" cx="35%" cy="28%" r="85%"><stop offset="0" stop-color="#2a7a52"/><stop offset=".6" stop-color="#1d5c3f"/><stop offset="1" stop-color="#103a28"/></radialGradient><linearGradient id="lg-gold" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#f7d867"/><stop offset="1" stop-color="#e9b21c"/></linearGradient></defs><rect width="1024" height="1024" rx="225.28" fill="url(#lg-bg)"/><circle cx="512.0" cy="512.0" r="368.64" fill="none" stroke="#ffffff" stroke-opacity=".16" stroke-width="69.632"/><path d="M295.3,810.2 A368.64,368.64 0 1 1 728.7,810.2" fill="none" stroke="url(#lg-gold)" stroke-width="69.632" stroke-linecap="round"/><circle cx="512.0" cy="512.0" r="261.12" fill="#ffffff"/><defs><clipPath id="lg-bc"><circle cx="512.0" cy="512.0" r="260.12"/></clipPath></defs><g clip-path="url(#lg-bc)"><polygon points="512.0,425.8 594.0,485.4 562.6,581.7 461.4,581.7 430.0,485.4" fill="#13261d" stroke="#13261d" stroke-width="7.8" stroke-linejoin="round"/><polygon points="512.0,318.8 437.5,264.6 466.0,177.1 558.0,177.1 586.5,264.6" fill="#13261d" stroke="#13261d" stroke-width="7.8" stroke-linejoin="round"/><line x1="512.0" y1="425.8" x2="512.0" y2="318.8" stroke="#13261d" stroke-width="13.1" stroke-linecap="round"/><line x1="586.5" y1="264.6" x2="724.2" y2="364.7" stroke="#13261d" stroke-width="13.1" stroke-linecap="round"/><polygon points="695.8,452.3 724.2,364.7 816.3,364.7 844.8,452.3 770.3,506.4" fill="#13261d" stroke="#13261d" stroke-width="7.8" stroke-linejoin="round"/><line x1="594.0" y1="485.4" x2="695.8" y2="452.3" stroke="#13261d" stroke-width="13.1" stroke-linecap="round"/><line x1="770.3" y1="506.4" x2="717.7" y2="668.3" stroke="#13261d" stroke-width="13.1" stroke-linecap="round"/><polygon points="625.6,668.3 717.7,668.3 746.1,755.9 671.6,810.0 597.1,755.9" fill="#13261d" stroke="#13261d" stroke-width="7.8" stroke-linejoin="round"/><line x1="562.6" y1="581.7" x2="625.6" y2="668.3" stroke="#13261d" stroke-width="13.1" stroke-linecap="round"/><line x1="597.1" y1="755.9" x2="426.9" y2="755.9" stroke="#13261d" stroke-width="13.1" stroke-linecap="round"/><polygon points="398.4,668.3 426.9,755.9 352.4,810.0 277.9,755.9 306.3,668.3" fill="#13261d" stroke="#13261d" stroke-width="7.8" stroke-linejoin="round"/><line x1="461.4" y1="581.7" x2="398.4" y2="668.3" stroke="#13261d" stroke-width="13.1" stroke-linecap="round"/><line x1="306.3" y1="668.3" x2="253.7" y2="506.4" stroke="#13261d" stroke-width="13.1" stroke-linecap="round"/><polygon points="328.2,452.3 253.7,506.4 179.2,452.3 207.7,364.7 299.8,364.7" fill="#13261d" stroke="#13261d" stroke-width="7.8" stroke-linejoin="round"/><line x1="430.0" y1="485.4" x2="328.2" y2="452.3" stroke="#13261d" stroke-width="13.1" stroke-linecap="round"/><line x1="299.8" y1="364.7" x2="437.5" y2="264.6" stroke="#13261d" stroke-width="13.1" stroke-linecap="round"/></g></svg><div class="brand"><b>Gol Provável</b><small id="status">Carregando…</small></div>
+    <button class="btn" id="refresh" type="button" aria-label="Atualizar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+      <span class="lbl">Atualizar</span>
+    </button>
+  </div>
+</header>
+<div class="banner" id="banner" hidden></div>
+
+<main class="wrap" id="main"></main>
+
+<nav class="bottom" aria-label="Seções">
+  <div class="in">
+    <a href="#hoje" data-v="hoje"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Hoje</a>
+    <a href="#amanha" data-v="amanha"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Amanhã</a>
+    <a href="#historico" data-v="historico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Histórico</a>
+    <a href="#desempenho" data-v="desempenho"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Acertos</a>
+    <a href="#ajustes" data-v="ajustes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Ajustes</a>
+  </div>
+</nav>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script type="application/json" id="seed">null</script>
+<script>
+(function(){
+"use strict";
+
+/* ================= utilidades ================= */
+var $ = function(id){ return document.getElementById(id); };
+function el(t,c,x){ var e=document.createElement(t); if(c) e.className=c; if(x!=null) e.textContent=x; return e; }
+function pct(x){ return x==null ? "–" : (Math.round(x*1000)/10).toFixed(1).replace(".",",")+"%"; }
+function dec(x){ return x.toFixed(2).replace(".",","); }
+var WD=["Domingo","Segunda","Terça","Quarta","Quinta","Sexta","Sábado"], MON=["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
+function dObj(s){ var p=s.split("-"); return new Date(+p[0],+p[1]-1,+p[2]); }
+function ymd(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function addDays(s,n){ var d=dObj(s); d.setDate(d.getDate()+n); return ymd(d); }
+function dLong(s){ var d=dObj(s); return WD[d.getDay()]+", "+d.getDate()+" de "+MON[d.getMonth()]+" de "+d.getFullYear(); }
+function dShort(s){ var d=dObj(s); return WD[d.getDay()].slice(0,3)+" "+d.getDate()+"/"+(d.getMonth()+1); }
+function todayBR(){ try{ return new Intl.DateTimeFormat("en-CA",{timeZone:"America/Sao_Paulo",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date()); }catch(e){ return ymd(new Date()); } }
+var store = {
+  get:function(k,d){ try{ var v=localStorage.getItem("gp_"+k); return v==null?d:JSON.parse(v); }catch(e){ return d; } },
+  set:function(k,v){ try{ localStorage.setItem("gp_"+k,JSON.stringify(v)); }catch(e){} }
+};
+var toastT;
+function toast(msg){ var t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastT); toastT=setTimeout(function(){ t.hidden=true; },5000); }
+
+/* ================= mercados ================= */
+var MARKETS = [
+  {id:"p1",   name:"1 gol ou mais",      short:"1+ gol"},
+  {id:"p2",   name:"2 gols ou mais",     short:"2+ gols"},
+  {id:"p3",   name:"3 gols ou mais",     short:"3+ gols"},
+  {id:"btts", name:"Ambos marcam",       short:"ambos marcam"},
+  {id:"fav",  name:"Favorito vence",     short:"favorito vence"},
+  {id:"score",name:"Placar exato",       short:"placar exato"}
+];
+function mkt(id){ return MARKETS.find(function(m){return m.id===id;}) || MARKETS[0]; }
+function prob(m,id){
+  if (id==="fav") return m.hda ? Math.max(m.hda[0],m.hda[2]) : null;
+  if (id==="score") return m.sc ? m.sc[0][2] : null;
+  return m[id]==null ? null : m[id];
+}
+function hasRes(m){ return Array.isArray(m.res); }
+function hit(m,id){
+  if (!hasRes(m)) return null;
+  var h=m.res[0], a=m.res[1], g=h+a;
+  if (id==="p1") return g>=1; if (id==="p2") return g>=2; if (id==="p3") return g>=3;
+  if (id==="btts") return m.btts==null ? null : (h>=1 && a>=1);
+  if (id==="fav"){ if(!m.hda) return null; return m.hda[0]>=m.hda[2] ? h>a : a>h; }
+  if (id==="score"){ if(!m.sc) return null; return m.sc[0][0]===h && m.sc[0][1]===a; }
+  return null;
+}
+function favName(m){ return m.hda ? (m.hda[0]>=m.hda[2] ? m.h : m.a) : ""; }
+
+/* ================= estado ================= */
+var S = {
+  data:null, demo:false, months:{}, today:todayBR(),
+  market: store.get("market","p1"), thr: store.get("thr",80), lg:"all", q:"", show: store.get("show","pass"), period:"30"
+};
+
+/* ================= dados ================= */
+function seed(){ try{ return JSON.parse($("seed").textContent); }catch(e){ return null; } }
+function loadData(){
+  return Promise.resolve().then(function(){ return fetch("data.json?t="+Date.now(),{cache:"no-store"}); }).then(function(r){ if(!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function(d){ S.data=d; S.demo=false; })
+    .catch(function(){ var s=seed(); if(s){ S.data=s; S.demo=true; } else throw new Error("sem dados"); });
+}
+function loadMonths(){
+  var ms=(S.data.months||[]).filter(function(m){ return !S.months[m]; });
+  if (S.demo || !ms.length) return Promise.resolve();
+  return Promise.all(ms.map(function(m){
+    return fetch("history/"+m+".json?t="+(S.data.updated||"")).then(function(r){return r.ok?r.json():{days:[]};})
+      .then(function(j){ S.months[m]=j.days||[]; }).catch(function(){ S.months[m]=[]; });
+  }));
+}
+function allDays(){
+  var byd={};
+  Object.keys(S.months).forEach(function(k){ S.months[k].forEach(function(d){ byd[d.date]=d; }); });
+  (S.data.days||[]).forEach(function(d){ byd[d.date]=d; });
+  return Object.keys(byd).sort().map(function(k){ return byd[k]; });
+}
+function dayOf(date){ return allDays().find(function(d){ return d.date===date; }); }
+function lgName(k){ return (S.data.leagues&&S.data.leagues[k]&&S.data.leagues[k].name) || k; }
+function setStatus(){
+  var d=S.data, txt;
+  if (!d) { $("status").textContent="Sem dados"; return; }
+  var when = d.updated===S.today ? "hoje" : (d.updated===addDays(S.today,-1) ? "ontem" : dShort(d.updated));
+  txt = "Atualizado "+when+(d.updated_time?" às "+d.updated_time:"");
+  $("status").textContent = txt + (S.demo ? " · prévia" : "");
+  var b=$("banner");
+  if (S.demo){ b.hidden=false; b.textContent="Você está vendo uma prévia com dados de exemplo. Na versão instalada pelo GitHub, o app se atualiza sozinho e o botão Atualizar busca dados novos."; }
+  else if (d.error){
+    b.hidden=false; b.textContent="";
+    b.appendChild(el("b",null,"⚠️ A busca de dados falhou"+(d.error_at?" ("+d.error_at+")":"")+". "));
+    b.appendChild(document.createTextNode(d.error));
+    b.style.background="#fbe9e4"; b.style.color="#5a1d12";
+  }
+  else { b.hidden=true; b.removeAttribute("style"); }
+}
+
+/* ================= navegação ================= */
+function route(){
+  var h=(location.hash||"#hoje").slice(1);
+  document.querySelectorAll("nav.bottom a").forEach(function(a){
+    var on = a.dataset.v===h || (h.indexOf("dia-")===0 && a.dataset.v==="historico");
+    if (on) a.setAttribute("aria-current","page"); else a.removeAttribute("aria-current");
+  });
+  var main=$("main"); main.textContent="";
+  window.scrollTo(0,0);
+  if (h==="hoje") return viewDay(main,S.today,"hoje");
+  if (h==="amanha") return viewDay(main,addDays(S.today,1),"amanha");
+  if (h.indexOf("dia-")===0){ var s=h.slice(4); return viewDay(main,s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6,8),"dia"); }
+  if (h==="historico") return withMonths(main,viewHistory);
+  if (h==="desempenho") return withMonths(main,viewPerf);
+  if (h==="ajustes") return viewSettings(main);
+  location.hash="hoje";
+}
+function withMonths(main,fn){
+  main.appendChild(el("p","empty","Carregando histórico…"));
+  loadMonths().then(function(){ main.textContent=""; fn(main); });
+}
+window.addEventListener("hashchange",route);
+
+/* ================= tela: dia ================= */
+function hero(main,date,title,tallyN,tallyTxt){
+  var h=el("section","hero");
+  h.appendChild(el("p","date",date));
+  h.appendChild(el("h1",null,title));
+  if (tallyN!=null){ var t=el("div","tally"); t.appendChild(el("b",null,tallyN)); t.appendChild(el("span",null,tallyTxt)); h.appendChild(t); }
+  main.appendChild(h);
+}
+function filterBar(main,day,rerender){
+  var f=el("section","filters"); f.setAttribute("aria-label","Filtros");
+  // mercado
+  var c1=el("div"); var l1=el("label",null,"O que você quer prever"); l1.htmlFor="fMkt"; c1.appendChild(l1);
+  var s1=el("select"); s1.id="fMkt";
+  MARKETS.forEach(function(m){ var o=el("option",null,m.name); o.value=m.id; if(m.id===S.market) o.selected=true; s1.appendChild(o); });
+  s1.addEventListener("change",function(){ S.market=s1.value; store.set("market",S.market); if(S.market==="score"&&S.thr>30){ S.thr=10; } rerender(); });
+  c1.appendChild(s1); f.appendChild(c1);
+  // limiar
+  var c2=el("div"); var l2=el("label",null,"Chance mínima"); l2.htmlFor="fThr"; c2.appendChild(l2);
+  var r=el("input"); r.type="range"; r.id="fThr"; r.min="5"; r.max="99"; r.step="1"; r.value=S.thr;
+  var th=el("div","thr"); th.appendChild(el("span",null,"5%")); var out=el("output",null,S.thr+"%"); th.appendChild(out); th.appendChild(el("span",null,"99%"));
+  r.addEventListener("input",function(){ S.thr=+r.value; out.textContent=r.value+"%"; store.set("thr",S.thr); rerender(true); });
+  c2.appendChild(r); c2.appendChild(th); f.appendChild(c2);
+  // competição
+  var c3=el("div"); var l3=el("label",null,"Competição"); l3.htmlFor="fLg"; c3.appendChild(l3);
+  var s3=el("select"); s3.id="fLg"; var o0=el("option",null,"Todas"); o0.value="all"; s3.appendChild(o0);
+  var lgs={}; (day?day.matches:[]).forEach(function(m){ lgs[m.lg]=1; });
+  Object.keys(lgs).sort(function(a,b){ return lgName(a)<lgName(b)?-1:1; }).forEach(function(k){ var o=el("option",null,lgName(k)); o.value=k; if(k===S.lg) o.selected=true; s3.appendChild(o); });
+  s3.addEventListener("change",function(){ S.lg=s3.value; rerender(); });
+  c3.appendChild(s3); f.appendChild(c3);
+  // busca + mostrar
+  var c4=el("div"); var l4=el("label",null,"Procurar time"); l4.htmlFor="fQ"; c4.appendChild(l4);
+  var q=el("input"); q.type="search"; q.id="fQ"; q.placeholder="Ex.: Flamengo"; q.value=S.q;
+  q.addEventListener("input",function(){ S.q=q.value; rerender(true); });
+  c4.appendChild(q); f.appendChild(c4);
+  var c5=el("div"); var l5=el("label",null,"Mostrar"); l5.htmlFor="fShow"; c5.appendChild(l5);
+  var s5=el("select"); s5.id="fShow";
+  [["pass","Só os que passam no filtro"],["all","Todos os jogos do dia"]].forEach(function(x){ var o=el("option",null,x[1]); o.value=x[0]; if(x[0]===S.show) o.selected=true; s5.appendChild(o); });
+  s5.addEventListener("change",function(){ S.show=s5.value; store.set("show",S.show); rerender(); });
+  c5.appendChild(s5); f.appendChild(c5);
+  main.appendChild(f);
+}
+function viewDay(main,date,kind){
+  var day=dayOf(date);
+  var top=el("div"), list=el("div");
+  main.appendChild(top);
+  function render(onlyList){
+    var thr=S.thr/100, mk=mkt(S.market), q=S.q.trim().toLowerCase();
+    var ms=(day?day.matches:[]).filter(function(m){ return m.res!=="adiado" && (S.lg==="all"||m.lg===S.lg) && (!q || (m.h+" "+m.a).toLowerCase().indexOf(q)>=0); });
+    var pass=ms.filter(function(m){ var p=prob(m,S.market); return p!=null && p>=thr; });
+    var done=pass.filter(hasRes), ok=done.filter(function(m){ return hit(m,S.market); });
+    if (!onlyList){
+      top.textContent="";
+      var title = kind==="amanha" ? "Jogos de amanhã" : (date<S.today ? "Como foram as previsões" : "Jogos de hoje");
+      var tn = done.length ? ok.length+" de "+done.length : (day ? pass.length+" de "+ms.length : null);
+      var tt = done.length ? "acertos entre os jogos com "+S.thr+"% ou mais em “"+mk.short+"”" : "jogos com "+S.thr+"% ou mais de chance em “"+mk.short+"”";
+      hero(top,dLong(date)+" · horários de Brasília",title,tn,tt);
+      if (day) filterBar(top,day,render);
+    } else {
+      var tb=top.querySelector(".tally");
+      if (tb){ tb.firstChild.textContent = done.length ? ok.length+" de "+done.length : pass.length+" de "+ms.length;
+               tb.lastChild.textContent = done.length ? "acertos entre os jogos com "+S.thr+"% ou mais em “"+mk.short+"”" : "jogos com "+S.thr+"% ou mais de chance em “"+mk.short+"”"; }
+    }
+    list.textContent="";
+    if (!day){
+      list.appendChild(el("p","empty", kind==="amanha" ? "Os jogos de amanhã aparecem depois da atualização automática das 7h ou 12h. Toque em Atualizar para buscar agora." : "Nenhum jogo registrado para este dia. Toque em Atualizar para buscar."));
+      return;
+    }
+    var groups={};
+    ms.forEach(function(m){ (groups[m.lg]=groups[m.lg]||[]).push(m); });
+    var keys=Object.keys(groups).sort(function(a,b){ return lgName(a)<lgName(b)?-1:1; });
+    var any=false;
+    keys.forEach(function(k){
+      var g=groups[k].slice().sort(function(a,b){ return (a.t||"")===(b.t||"") ? (prob(b,S.market)||0)-(prob(a,S.market)||0) : ((a.t||"")<(b.t||"")?-1:1); });
+      var shown=g.filter(function(m){ var p=prob(m,S.market); return S.show==="all" || (p!=null && p>=thr); });
+      if (!shown.length) return;
+      any=true;
+      var sec=el("section","group");
+      sec.appendChild(el("h2",null,lgName(k)));
+      var L=S.data.leagues&&S.data.leagues[k];
+      sec.appendChild(el("p","src", g.length+" jogos · "+shown.length+" no filtro"+(L&&L.obs?" · média de "+dec(L.obs)+" gols por jogo nesta temporada":"")));
+      shown.forEach(function(m){ sec.appendChild(card(m,thr)); });
+      list.appendChild(sec);
+    });
+    if (!any) list.appendChild(el("p","empty","Nenhum jogo passa nesse filtro. Diminua a chance mínima, troque o mercado ou escolha “Todos os jogos do dia”."));
+  }
+  render();
+  main.appendChild(list);
+}
+function card(m,thr){
+  var p=prob(m,S.market), okp=p!=null&&p>=thr;
+  var d=el("article","match"), row=el("div","row");
+  row.appendChild(el("div","time",m.t||""));
+  var tm=el("div","teams"); tm.appendChild(document.createTextNode(m.h+" x "+m.a));
+  var sub=el("div","sub");
+  if (m.sc){ sub.appendChild(el("span","chip","Placar provável "+m.sc[0][0]+" x "+m.sc[0][1])); }
+  if (S.market==="fav" && m.hda){ sub.appendChild(el("span","chip","Favorito: "+favName(m))); }
+  if (hasRes(m)){
+    var h=hit(m,S.market);
+    var r=el("span","chip res "+(h===true?"hit":h===false?"miss":""), "Final "+m.res[0]+" x "+m.res[1]+(h===true?" ✓":h===false?" ✗":""));
+    r.setAttribute("aria-label","Placar final "+m.res[0]+" a "+m.res[1]+(h==null?"":(h?", previsão certa":", previsão errada")));
+    sub.appendChild(r);
+  }
+  if (sub.childNodes.length) tm.appendChild(sub);
+  row.appendChild(tm);
+  var pc=el("div","pct"+(okp?"":" no"), pct(p)); pc.appendChild(el("small",null,mkt(S.market).short)); row.appendChild(pc);
+  d.appendChild(row);
+  if (m.hda){
+    var bar=el("div","hda"); bar.setAttribute("aria-hidden","true");
+    m.hda.forEach(function(x){ var i=el("i"); i.style.width=(x*100).toFixed(1)+"%"; bar.appendChild(i); });
+    d.appendChild(bar);
+    var lb=el("div","hdal");
+    lb.appendChild(el("span",null,"Casa "+pct(m.hda[0]))); lb.appendChild(el("span",null,"Empate "+pct(m.hda[1]))); lb.appendChild(el("span",null,"Fora "+pct(m.hda[2])));
+    d.appendChild(lb);
+  }
+  var det=el("details"); det.appendChild(el("summary",null,"Ver todos os números"));
+  var g=el("div","det");
+  var rows=[["1 gol ou mais",pct(m.p1)],["2 gols ou mais",pct(m.p2)],["3 gols ou mais",pct(m.p3)],["Ambos marcam",pct(m.btts)],["Sem gols (0 x 0)",m.p1==null?"–":pct(1-m.p1)]];
+  if (m.lh!=null) rows.push(["Gols esperados",dec(m.lh)+" x "+dec(m.la)]);
+  if (m.sc) rows.push(["Placares mais prováveis", m.sc.map(function(s){ return s[0]+"x"+s[1]+" ("+pct(s[2])+")"; }).join(" · ")]);
+  if (m.sh) rows.push([m.h+" na temporada", m.sh[1]+" gols marcados, "+m.sh[2]+" sofridos em "+m.sh[0]+" jogos"]);
+  if (m.sa) rows.push([m.a+" na temporada", m.sa[1]+" gols marcados, "+m.sa[2]+" sofridos em "+m.sa[0]+" jogos"]);
+  rows.forEach(function(x){ var s=el("div",null,x[0]+": "); s.appendChild(el("b",null,x[1])); g.appendChild(s); });
+  det.appendChild(g); d.appendChild(det);
+  return d;
+}
+
+/* ================= tela: histórico ================= */
+function viewHistory(main){
+  var days=allDays().filter(function(d){ return d.date<=S.today; }).reverse();
+  var mk=mkt(S.market), thr=S.thr/100;
+  hero(main,"Todas as previsões já feitas","Histórico",days.length,days.length===1?"dia registrado":"dias registrados");
+  var seg=el("div","seg");
+  MARKETS.forEach(function(m){ var b=el("button",null,m.short); b.type="button"; b.setAttribute("aria-pressed",String(m.id===S.market));
+    b.addEventListener("click",function(){ S.market=m.id; store.set("market",m.id); route(); }); seg.appendChild(b); });
+  main.appendChild(seg);
+  main.appendChild(el("p","empty","Acertos entre os jogos com "+S.thr+"% ou mais em “"+mk.short+"”. Toque em um dia para ver jogo a jogo."));
+  var list=el("div","list");
+  if (!days.length) list.appendChild(el("p","empty","Ainda não há dias registrados."));
+  days.forEach(function(d){
+    var ms=d.matches.filter(function(m){ return m.res!=="adiado"; });
+    var pk=ms.filter(function(m){ var p=prob(m,S.market); return p!=null&&p>=thr; });
+    var done=pk.filter(hasRes), ok=done.filter(function(m){ return hit(m,S.market); });
+    var a=el("a"); a.href="#dia-"+d.date.replace(/-/g,"");
+    var left=el("div"); left.appendChild(el("b",null,dLong(d.date))); left.appendChild(el("br"));
+    left.appendChild(el("span",null, ms.length+" jogos · "+(done.length ? ok.length+" acertos em "+done.length : (pk.length? pk.length+" no filtro, aguardando placares":"nenhum no filtro"))));
+    a.appendChild(left);
+    a.appendChild(el("div","rate", done.length ? Math.round(ok.length/done.length*100)+"%" : "–"));
+    list.appendChild(a);
+  });
+  main.appendChild(list);
+}
+
+/* ================= tela: desempenho ================= */
+function viewPerf(main){
+  var thr=S.thr/100;
+  var from = S.period==="all" ? "0000" : addDays(S.today,-(+S.period));
+  var all=[]; allDays().forEach(function(d){ if(d.date>=from) d.matches.forEach(function(m){ if(hasRes(m)) all.push(m); }); });
+  hero(main,"Previsões comparadas com os placares reais","Acertos do app",all.length,"jogos com resultado no período");
+  var seg=el("div","seg");
+  [["7","7 dias"],["30","30 dias"],["90","90 dias"],["all","Tudo"]].forEach(function(x){ var b=el("button",null,x[1]); b.type="button"; b.setAttribute("aria-pressed",String(S.period===x[0]));
+    b.addEventListener("click",function(){ S.period=x[0]; route(); }); seg.appendChild(b); });
+  main.appendChild(seg);
+  var tw=el("div","filters");
+  var c=el("div"); var l=el("label",null,"Contar como aposta do app a partir de"); l.htmlFor="pThr"; c.appendChild(l);
+  var r=el("input"); r.type="range"; r.id="pThr"; r.min="5"; r.max="99"; r.value=S.thr;
+  var th=el("div","thr"); th.appendChild(el("span",null,"5%")); var out=el("output",null,S.thr+"%"); th.appendChild(out); th.appendChild(el("span",null,"99%"));
+  r.addEventListener("change",function(){ S.thr=+r.value; store.set("thr",S.thr); route(); });
+  r.addEventListener("input",function(){ out.textContent=r.value+"%"; });
+  c.appendChild(r); c.appendChild(th); tw.appendChild(c); main.appendChild(tw);
+
+  if (!all.length){ main.appendChild(el("p","empty","Ainda não há placares neste período. Os resultados entram automaticamente na manhã seguinte a cada jogo.")); return; }
+
+  var k=el("div","kpis");
+  MARKETS.forEach(function(mk){
+    var base=all.filter(function(m){ return prob(m,mk.id)!=null && hit(m,mk.id)!=null; });
+    var pk=base.filter(function(m){ return prob(m,mk.id)>=thr; });
+    var h=pk.filter(function(m){ return hit(m,mk.id); }).length;
+    var exp=pk.length ? pk.reduce(function(s,m){ return s+prob(m,mk.id); },0)/pk.length : 0;
+    var c=el("div","kpi");
+    c.appendChild(el("h3",null,mk.name));
+    c.appendChild(el("div","big", pk.length ? pct(h/pk.length) : "–"));
+    c.appendChild(el("p",null, pk.length ? h+" acertos em "+pk.length+" jogos com "+S.thr+"% ou mais." : "Nenhum jogo com "+S.thr+"% ou mais neste período."));
+    if (pk.length) c.appendChild(el("p",null,"O app esperava "+pct(exp)+". "+(h/pk.length>=exp-0.03?"Dentro ou acima do esperado.":"Abaixo do esperado.")));
+    k.appendChild(c);
+  });
+  main.appendChild(k);
+
+  // resultado (1X2) e placar exato, em todos os jogos
+  var withH=all.filter(function(m){ return m.hda; });
+  if (withH.length){
+    var r1=withH.filter(function(m){ var i=m.hda.indexOf(Math.max.apply(null,m.hda)); var o=m.res[0]>m.res[1]?0:(m.res[0]===m.res[1]?1:2); return i===o; }).length;
+    var withS=all.filter(function(m){ return m.sc; });
+    var s1=withS.filter(function(m){ return hit(m,"score"); }).length;
+    var s3=withS.filter(function(m){ return m.sc.some(function(s){ return s[0]===m.res[0]&&s[1]===m.res[1]; }); }).length;
+    var sec=el("div","sect");
+    sec.appendChild(el("h2",null,"Resultado e placar, em todos os jogos"));
+    sec.appendChild(el("p",null,"Aqui não há filtro de chance: vale para todos os jogos com resultado. Para comparação, quem chuta ao acaso acerta cerca de 33% dos resultados e menos de 5% dos placares."));
+    var k2=el("div","kpis");
+    [["Resultado (casa, empate ou fora)",r1,withH.length],["Placar exato (1º palpite)",s1,withS.length],["Placar entre os 3 palpites",s3,withS.length]].forEach(function(x){
+      var c=el("div","kpi"); c.appendChild(el("h3",null,x[0])); c.appendChild(el("div","big",x[2]?pct(x[1]/x[2]):"–")); c.appendChild(el("p",null,x[1]+" de "+x[2]+" jogos")); k2.appendChild(c);
+    });
+    sec.appendChild(k2); main.appendChild(sec);
+  }
+
+  // calibração
+  var mk=mkt(S.market);
+  var s=el("div","sect");
+  s.appendChild(el("h2",null,"As chances batem com a realidade?"));
+  var seg2=el("div","seg");
+  MARKETS.filter(function(x){return x.id!=="score";}).forEach(function(m){ var b=el("button",null,m.short); b.type="button"; b.setAttribute("aria-pressed",String(m.id===S.market));
+    b.addEventListener("click",function(){ S.market=m.id; store.set("market",m.id); route(); }); seg2.appendChild(b); });
+  s.appendChild(seg2);
+  s.appendChild(el("p",null,"Se o app diz 90%, cerca de 9 em cada 10 desses jogos deveriam acontecer. Faixas com poucos jogos ainda oscilam bastante."));
+  var tbl=table(["Faixa de chance","Jogos","Chance média","Aconteceu"]);
+  [[0,.3],[.3,.5],[.5,.6],[.6,.7],[.7,.8],[.8,.9],[.9,.95],[.95,1.01]].forEach(function(b){
+    var ms=all.filter(function(m){ var p=prob(m,mk.id); return p!=null && hit(m,mk.id)!=null && p>=b[0] && p<b[1]; });
+    if (!ms.length) return;
+    var pr=ms.reduce(function(a,m){ return a+prob(m,mk.id); },0)/ms.length, hp=ms.filter(function(m){ return hit(m,mk.id); }).length/ms.length;
+    addRow(tbl,[Math.round(b[0]*100)+"–"+Math.min(100,Math.round(b[1]*100))+"%", ms.length, pct(pr), pct(hp)]);
+  });
+  s.appendChild(tbl.wrap); main.appendChild(s);
+
+  // por competição
+  var s2=el("div","sect");
+  s2.appendChild(el("h2",null,"Por competição"));
+  s2.appendChild(el("p",null,"Acertos em “"+mk.short+"” entre os jogos com "+S.thr+"% ou mais."));
+  var t2=table(["Competição","Jogos","Gols por jogo","Acertos"]);
+  var byL={}; all.forEach(function(m){ (byL[m.lg]=byL[m.lg]||[]).push(m); });
+  Object.keys(byL).sort(function(a,b){ return byL[b].length-byL[a].length; }).forEach(function(lg){
+    var ms=byL[lg], gpg=ms.reduce(function(a,m){ return a+m.res[0]+m.res[1]; },0)/ms.length;
+    var pk=ms.filter(function(m){ var p=prob(m,mk.id); return p!=null&&p>=thr&&hit(m,mk.id)!=null; });
+    var h=pk.filter(function(m){ return hit(m,mk.id); }).length;
+    addRow(t2,[lgName(lg), ms.length, dec(gpg), pk.length ? h+"/"+pk.length+" ("+Math.round(h/pk.length*100)+"%)" : "–"]);
+  });
+  s2.appendChild(t2.wrap); main.appendChild(s2);
+}
+function table(head){
+  var wrap=el("div","tblwrap"), t=el("table"), th=el("thead"), tr=el("tr");
+  head.forEach(function(x){ tr.appendChild(el("th",null,x)); }); th.appendChild(tr); t.appendChild(th);
+  var tb=el("tbody"); t.appendChild(tb); wrap.appendChild(t);
+  return {wrap:wrap, tb:tb};
+}
+function addRow(t,cells){ var tr=el("tr"); cells.forEach(function(x){ tr.appendChild(el("td",null,String(x))); }); t.tb.appendChild(tr); }
+
+/* ================= GitHub: atualizar na hora ================= */
+function repoInfo(){
+  var o=store.get("owner",""), r=store.get("repo","");
+  if (!o && /\.github\.io$/.test(location.hostname)){
+    o=location.hostname.split(".")[0];
+    r=location.pathname.split("/").filter(Boolean)[0] || (o+".github.io");
+  }
+  return {owner:o, repo:r};
+}
+function gh(path,opt){
+  var tk=store.get("token","");
+  opt=opt||{}; opt.headers=Object.assign({"Accept":"application/vnd.github+json","Authorization":"Bearer "+tk,"X-GitHub-Api-Version":"2022-11-28"},opt.headers||{});
+  var R=repoInfo();
+  return fetch("https://api.github.com/repos/"+R.owner+"/"+R.repo+path,opt);
+}
+function canDispatch(){ var R=repoInfo(); return !S.demo && store.get("token","") && R.owner && R.repo; }
+var busy=false;
+function setBusy(on,label){
+  busy=on; var b=$("refresh"); b.disabled=on; b.classList.toggle("spin",on);
+  b.querySelector(".lbl").textContent = on ? (label||"Atualizando…") : "Atualizar";
+}
+function refresh(){
+  if (busy) return;
+  if (!canDispatch()){
+    setBusy(true,"Recarregando…");
+    loadData().then(function(){ setStatus(); route(); setBusy(false);
+      toast(S.demo ? "Prévia: na versão instalada este botão busca dados novos." : "Dados recarregados. Para buscar jogos e placares na hora, ative a atualização com um toque em Ajustes.");
+    }).catch(function(){ setBusy(false); toast("Sem conexão. Tente de novo em instantes."); });
+    return;
+  }
+  setBusy(true,"Buscando jogos…");
+  var started=Date.now();
+  gh("").then(function(r){ if(!r.ok) throw r; return r.json(); })
+  .then(function(repo){
+    return gh("/actions/workflows/atualizar.yml/dispatches",{method:"POST",body:JSON.stringify({ref:repo.default_branch||"main"})});
+  }).then(function(r){
+    if (r.status!==204) throw r;
+    toast("Busca iniciada. Leva de 2 a 4 minutos; pode continuar usando o app.");
+    poll(started,0);
+  }).catch(function(e){
+    setBusy(false);
+    var st=e&&e.status;
+    toast(st===401 ? "A chave de acesso não foi aceita. Confira em Ajustes." : st===404||st===403 ? "Sem permissão para iniciar a atualização. Confira a chave e o repositório em Ajustes." : "Não consegui iniciar a busca agora. Tente de novo em instantes.");
+  });
+}
+function poll(started,n){
+  if (n>40){ setBusy(false); toast("A busca está demorando. Ela continua no GitHub; toque em Atualizar daqui a pouco."); return; }
+  setTimeout(function(){
+    gh("/actions/workflows/atualizar.yml/runs?per_page=1").then(function(r){ return r.json(); }).then(function(j){
+      var run=j.workflow_runs&&j.workflow_runs[0];
+      if (!run || new Date(run.created_at).getTime() < started-60000){ return poll(started,n+1); }
+      if (run.status!=="completed"){ setBusy(true, run.status==="queued" ? "Na fila…" : "Calculando…"); return poll(started,n+1); }
+      if (run.conclusion!=="success"){ setBusy(false); toast("A busca terminou com erro. Veja os detalhes em Ajustes > Ver execuções no GitHub."); return; }
+      setBusy(true,"Publicando…");
+      setTimeout(function(){ loadData().then(function(){ S.months={}; setStatus(); route(); setBusy(false); toast("Pronto! Jogos e placares atualizados."); }); },25000);
+    }).catch(function(){ poll(started,n+1); });
+  }, n===0 ? 20000 : 12000);
+}
+$("refresh").addEventListener("click",refresh);
+
+/* ================= tela: ajustes ================= */
+var installEvt=null;
+window.addEventListener("beforeinstallprompt",function(e){ e.preventDefault(); installEvt=e; });
+function viewSettings(main){
+  hero(main,"Instalação, atualização e informações","Ajustes");
+  // instalar
+  var c1=el("section","card"); c1.appendChild(el("h2",null,"Instalar no celular ou computador"));
+  var standalone = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  var ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
+  if (standalone){ c1.appendChild(el("p","ok","O app já está instalado neste aparelho.")); }
+  else if (installEvt){
+    c1.appendChild(el("p",null,"Instale para abrir o Gol Provável direto da tela inicial, como qualquer app."));
+    var a=el("div","actions"), b=el("button","btn","Instalar o app"); b.type="button";
+    b.addEventListener("click",function(){ installEvt.prompt(); installEvt.userChoice.then(function(){ installEvt=null; route(); }); });
+    a.appendChild(b); c1.appendChild(a);
+  } else if (ios){
+    var ol=el("ol"); ["Abra este link no Safari.","Toque no botão Compartilhar (o quadrado com a seta para cima).","Role e toque em “Adicionar à Tela de Início”.","Toque em “Adicionar”. Pronto: o ícone aparece na tela."].forEach(function(t){ ol.appendChild(el("li",null,t)); });
+    c1.appendChild(ol);
+  } else {
+    var ol2=el("ol"); ["No Android, abra este link no Chrome.","Toque nos três pontinhos no canto superior direito.","Toque em “Instalar app” ou “Adicionar à tela inicial”.","No computador, use o ícone de instalar na barra de endereço do Chrome ou Edge."].forEach(function(t){ ol2.appendChild(el("li",null,t)); });
+    c1.appendChild(ol2);
+  }
+  main.appendChild(c1);
+
+  // atualização com um toque
+  var R=repoInfo(), tk=store.get("token","");
+  var c2=el("section","card"); c2.appendChild(el("h2",null,"Atualização com um toque"));
+  c2.appendChild(el("p",null,"O app já se atualiza sozinho às 7h e às 12h. Se quiser que o botão Atualizar busque jogos e placares na hora, faça isto uma única vez neste aparelho:"));
+  var ol3=el("ol");
+  var li1=el("li"); li1.appendChild(document.createTextNode("Toque em ")); var lk=el("a",null,"criar chave de acesso no GitHub"); lk.href="https://github.com/settings/personal-access-tokens/new"; lk.target="_blank"; lk.rel="noopener"; li1.appendChild(lk); li1.appendChild(document.createTextNode(" (entre na sua conta se pedir).")); ol3.appendChild(li1);
+  ["Em “Token name”, escreva: gol-provavel. Em “Expiration”, escolha a opção mais longa.",
+   "Em “Repository access”, marque “Only select repositories” e escolha o repositório "+(R.repo||"gol-provavel")+".",
+   "Em “Permissions”, abra “Repository permissions”, procure “Actions” e escolha “Read and write”.",
+   "Desça até o fim, toque em “Generate token” e copie o código que aparece (começa com github_pat_).",
+   "Cole o código abaixo e toque em Salvar."].forEach(function(t){ ol3.appendChild(el("li",null,t)); });
+  c2.appendChild(ol3);
+  var lab=el("label",null,"Chave de acesso"); lab.htmlFor="tk"; c2.appendChild(lab);
+  var inp=el("input"); inp.type="password"; inp.id="tk"; inp.autocomplete="off"; inp.placeholder="github_pat_…"; inp.value=tk; c2.appendChild(inp);
+  var msg=el("p",null, tk ? "Chave salva neste aparelho." : "Nenhuma chave salva.");
+  var act=el("div","actions");
+  var bs=el("button","btn","Salvar e testar"); bs.type="button";
+  bs.addEventListener("click",function(){
+    store.set("token",inp.value.trim()); msg.className=""; msg.textContent="Testando…";
+    gh("/actions/workflows/atualizar.yml").then(function(r){
+      if (r.ok){ msg.className="ok"; msg.textContent="Tudo certo! O botão Atualizar agora busca dados na hora."; }
+      else { msg.className="err"; msg.textContent = r.status===401 ? "Chave não aceita. Copie de novo e cole aqui." : "A chave não tem acesso ao repositório "+R.owner+"/"+R.repo+". Confira os passos 3 e 4."; }
+    }).catch(function(){ msg.className="err"; msg.textContent="Sem conexão para testar agora."; });
+  });
+  var bc=el("button","btn ghost","Apagar chave"); bc.type="button";
+  bc.addEventListener("click",function(){ store.set("token",""); inp.value=""; msg.className=""; msg.textContent="Chave apagada deste aparelho."; });
+  act.appendChild(bs); act.appendChild(bc); c2.appendChild(act); c2.appendChild(msg);
+  c2.appendChild(el("p",null,"A chave fica guardada só neste aparelho e só permite iniciar a atualização deste app."));
+  var adv=el("details"); adv.style.marginLeft="0"; adv.appendChild(el("summary",null,"Repositório (só mexa se o teste falhar)"));
+  var lo=el("label",null,"Usuário do GitHub"); lo.htmlFor="ow"; var io=el("input"); io.type="text"; io.id="ow"; io.value=R.owner;
+  var lr=el("label",null,"Nome do repositório"); lr.htmlFor="rp"; var ir=el("input"); ir.type="text"; ir.id="rp"; ir.value=R.repo;
+  var bsv=el("button","btn ghost","Salvar repositório"); bsv.type="button"; bsv.style.marginTop=".6rem";
+  bsv.addEventListener("click",function(){ store.set("owner",io.value.trim()); store.set("repo",ir.value.trim()); toast("Repositório salvo."); });
+  [lo,io,lr,ir,bsv].forEach(function(x){ adv.appendChild(x); });
+  c2.appendChild(adv);
+  main.appendChild(c2);
+
+  // informações
+  var d=S.data||{};
+  var c3=el("section","card"); c3.appendChild(el("h2",null,"Informações"));
+  var kv=el("div","kv");
+  [["Última atualização", d.updated ? dLong(d.updated)+(d.updated_time?" às "+d.updated_time:"") : "–"],
+   ["Fonte dos dados", d.source||"–"],
+   ["Requisições restantes hoje", d.quota==null ? "–" : String(d.quota)+" de 100"],
+   ["Competições com dados", String(Object.keys(d.leagues||{}).length)]].forEach(function(x){ kv.appendChild(el("span",null,x[0])); kv.appendChild(el("b",null,x[1])); });
+  c3.appendChild(kv);
+  if (R.owner){ var a2=el("div","actions"), lnk=el("a","btn ghost","Ver execuções no GitHub"); lnk.href="https://github.com/"+R.owner+"/"+R.repo+"/actions"; lnk.target="_blank"; lnk.rel="noopener"; a2.appendChild(lnk); c3.appendChild(a2); }
+  main.appendChild(c3);
+
+  var c4=el("section","card"); c4.appendChild(el("h2",null,"Como as previsões são feitas"));
+  ["Cada time recebe uma força de ataque e de defesa calculada com os gols da temporada na competição, separando jogos em casa e fora. Com poucos jogos, os números são puxados para a média da liga, para evitar exageros.",
+   "Com isso o app estima quantos gols cada time deve marcar e calcula a chance de cada placar possível (de 0x0 a 10x10). Uma correção estatística conhecida como Dixon-Coles ajusta a frequência de placares baixos, como 0x0 e 1x1.",
+   "Todas as chances saem dessa tabela de placares: vitória, empate, derrota, número de gols e ambos marcam. A previsão de cada jogo fica congelada quando a bola rola, e a aba Acertos compara tudo com o placar real, sem retoques.",
+   "Escalações, lesões e motivação não entram no cálculo. É uma estimativa estatística, não uma garantia. Se for apostar, aposte só o que pode perder."].forEach(function(t){ c4.appendChild(el("p",null,t)); });
+  main.appendChild(c4);
+  var c5=el("section","card"); c5.appendChild(el("h2",null,"Privacidade")); c5.appendChild(el("p",null,"O app não pede cadastro, não usa rastreadores nem anúncios.")); var ap=el("div","actions"), pl=el("a","btn ghost","Ler a política de privacidade"); pl.href="privacidade.html"; ap.appendChild(pl); c5.appendChild(ap); main.appendChild(c5);
+}
+
+/* ================= início ================= */
+loadData().then(function(){ setStatus(); route(); })
+  .catch(function(){ $("status").textContent="Sem conexão"; $("main").appendChild(el("p","empty","Não consegui carregar os dados. Confira a internet e toque em Atualizar.")); });
+if ("serviceWorker" in navigator && /^https:$/.test(location.protocol) && /\.github\.io$|localhost/.test(location.hostname)){
+  try{ navigator.serviceWorker.register("sw.js").catch(function(){}); }catch(e){}
+}
+document.addEventListener("visibilitychange",function(){
+  if (document.visibilityState==="visible" && S.data && !busy && todayBR()!==S.today){ S.today=todayBR(); loadData().then(function(){ setStatus(); route(); }); }
+});
+})();
+</script>
+</body>
+</html>
