@@ -153,6 +153,36 @@ def predict(key, st, home, away):
     return dict(score_model(lh, la), sh=th.get("c", th["r"][:3]), sa=ta.get("c", ta["r"][:3]), fh=th.get("f", ""), fa=ta.get("f", ""))
 
 
+def team_table(key, prev_rows, cur_rows):
+    """Simulação da temporada: para cada jogo já encerrado, calcula o que o modelo teria previsto
+    usando só os jogos anteriores a ele, e compara com o que aconteceu, time por time."""
+    cur = sorted(cur_rows, key=lambda r: (r[4] or "")[:10])
+    acc = {}
+    i = 0
+    while i < len(cur):
+        day = (cur[i][4] or "")[:10]
+        j = i
+        while j < len(cur) and (cur[j][4] or "")[:10] == day:
+            j += 1
+        st = build_stats(list(prev_rows) + cur[:i], ref=day)
+        for h, a, x, y, _ in cur[i:j]:
+            p = predict(key, st, h, a)
+            pw, pd, pl = p["hda"]
+            for team, gf, gc, lf, lc, w, d, home in ((h, x, y, p["lh"], p["la"], pw, pd, True), (a, y, x, p["la"], p["lh"], pl, pd, False)):
+                e = acc.setdefault(team, [0, 0, 0.0, 0, 0.0, 0, 0.0, 0.0, 0.0])
+                pts = 3 if gf > gc else (1 if gf == gc else 0)
+                xpts = 3 * w + d
+                e[0] += 1; e[1] += gf; e[2] += lf; e[3] += gc; e[4] += lc; e[5] += pts; e[6] += xpts
+                e[7] += 9 * w + d - xpts ** 2          # variância dos pontos
+        i = j
+    out = []
+    for team, (jg, gp, xgp, gc, xgc, pts, xpts, vpts, _) in acc.items():
+        z = lambda real, prev, var: round((real - prev) / math.sqrt(var), 2) if var > 0 else 0.0
+        out.append(dict(t=team, j=jg, gp=gp, xgp=round(xgp, 1), gc=gc, xgc=round(xgc, 1), pts=pts, xpts=round(xpts, 1),
+                        zg=z(gp, xgp, xgp), zc=z(gc, xgc, xgc), zp=z(pts, xpts, vpts)))
+    return sorted(out, key=lambda r: -(r["pts"] - r["xpts"]))
+
+
 def score_model(lh, la, N=10):
     pois = lambda l, n: math.exp(-l) * l ** n / math.factorial(n)
     M = [[pois(lh, i) * pois(la, j) for j in range(N + 1)] for i in range(N + 1)]
@@ -487,6 +517,10 @@ def main():
             for team, e in st["teams"].items():
                 e["c"] = cur_only.get(team, {"r": [0, 0, 0]})["r"][:3]   # só a temporada atual, para exibir
             st["n_cur"] = len(cur_rows)
+            try:  # estatística "times x previsão" (simulação da temporada); nunca derruba a atualização
+                data.setdefault("teams", {})[f["lg"]] = {"at": today, "rows": team_table(f["lg"], prev_rows, cur_rows)}
+            except Exception as e:  # noqa: BLE001
+                log("Aviso: não consegui montar a tabela de times de %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
             st["obs_cur"] = round(sum(r[2] + r[3] for r in cur_rows) / len(cur_rows), 2) if cur_rows else None
         except ProviderError as e:
             log("AVISO: sem estatísticas de %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
@@ -527,6 +561,8 @@ def main():
     data["days"] = sorted([d for d in data["days"] if d["matches"]], key=lambda d: d["date"])
     archive(data)
 
+    old_t = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+    data["teams"] = {k: v for k, v in data.get("teams", {}).items() if v.get("at", "") >= old_t}
     cut = (now - timedelta(days=3)).isoformat()
     cut_prev = (now - timedelta(days=PREV_SEASON_MAX_AGE_D + 5)).isoformat()
     cache = {k: v for k, v in cache.items() if v["at"] >= (cut_prev if k.startswith("prev|") else cut)}
