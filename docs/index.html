@@ -342,11 +342,10 @@ function sugOf(m){ return m.sg || (m.sc ? m.sc[0] : null); }
 function panorama(m){
   if (!hasRes(m)) return [];
   var x=m.res[0], y=m.res[1], g=x+y, out=[];
-  if (m.p1!=null){ var p1=m.p1>=0.5; out.push({l:"1+ gol",p:p1?"sim":"não",ok:p1===(g>=1)}); }
-  [["p2","2+ gols",g>=2],["p3","3+ gols",g>=3],["btts","Ambos marcam",x>=1&&y>=1]].forEach(function(k){
-    if (m[k[0]]==null) return; var pr=m[k[0]]>=0.5; out.push({l:k[1],p:pr?"sim":"não",ok:pr===k[2]}); });
-  if (m.hda){ var o=m.hda.indexOf(Math.max.apply(null,m.hda)), r=x>y?0:(x===y?1:2); out.push({l:"Resultado",p:["casa","empate","fora"][o],ok:o===r}); }
-  var sg=sugOf(m); if (sg) out.push({l:"Placar",p:sg[0]+"x"+sg[1],ok:sg[0]===x&&sg[1]===y});
+  [["p1","1+ gol",g>=1],["p2","2+ gols",g>=2],["p3","3+ gols",g>=3],["btts","Ambos marcam",x>=1&&y>=1]].forEach(function(k){
+    if (m[k[0]]==null) return; out.push({id:k[0],l:k[1],pr:m[k[0]],ok:k[2]}); });
+  if (m.hda){ var home=m.hda[0]>=m.hda[2]; out.push({id:"fav",l:"Favorito venceu",who:home?m.h:m.a,pr:home?m.hda[0]:m.hda[2],ok:home?x>y:y>x}); }
+  var sg=sugOf(m); if (sg) out.push({id:"score",l:"Placar",who:sg[0]+"x"+sg[1],pr:sg[2],ok:sg[0]===x&&sg[1]===y});
   return out;
 }
 
@@ -540,15 +539,17 @@ function card(m,thr){
   }
   var pan=panorama(m);
   if (pan.length){
-    var pr=el("div","pan"); pr.setAttribute("aria-label","Panorama final: "+pan.map(function(x){ return x.l+" "+x.p+(x.ok?" certo":" errado"); }).join(", "));
-    pan.forEach(function(x){ var sp=el("span",x.ok?"y":"n"); sp.appendChild(el("b",null,x.ok?"✓ ":"✗ ")); sp.appendChild(document.createTextNode(x.l+": "+x.p)); pr.appendChild(sp); });
+    var pr=el("div","pan"); pr.setAttribute("aria-label","Panorama final: "+pan.map(function(x){ return x.l+(x.ok?" sim":" não"); }).join(", "));
+    pan.forEach(function(x){ var sp=el("span",x.ok?"y":"n"); sp.appendChild(el("b",null,x.ok?"✓ ":"✗ "));
+      var txt = x.id==="fav" ? "Favorito ("+x.who+") venceu" : x.id==="score" ? "Placar sugerido "+x.who : x.l;
+      sp.appendChild(document.createTextNode(txt+" ("+Math.round(x.pr*100)+"%)")); sp.title="Chance que o app deu: "+pct(x.pr); pr.appendChild(sp); });
     d.appendChild(pr);
   }
   if (m.inj){
     var ir=el("div","injrow"), parts=[];
     [[m.h,m.inj.h],[m.a,m.inj.a]].forEach(function(x){
       if (!x[1]||!x[1].length) return;
-      var sp=el("span"); sp.appendChild(document.createTextNode("✚ "+shortName(x[0])+": "));
+      var sp=el("span"); sp.appendChild(document.createTextNode("✚ "+x[0]+": "));
       var imp=x[1].filter(injImportant).slice(0,2);
       imp.forEach(function(p,i){ if(i) sp.appendChild(document.createTextNode(", ")); sp.appendChild(el("b",null,shortName(p.n)+(p.t==="Q"?" (dúvida)":""))); });
       var rest=x[1].length-imp.length; if(rest>0) sp.appendChild(document.createTextNode((imp.length?" +":"")+rest+(imp.length?"":rest>1?" desfalques":" desfalque")));
@@ -619,18 +620,20 @@ function card(m,thr){
 function viewHistory(main){
   var days=allDays().filter(function(d){ return d.date<=S.today; }).reverse();
   var mk=mkt(S.market), thr=S.thr/100;
-  var KEYS=["1+ gol","2+ gols","3+ gols","Ambos marcam","Resultado","Placar"];
-  function tally(ms){ var t={}; KEYS.forEach(function(k){ t[k]=[0,0]; });
-    ms.forEach(function(m){ panorama(m).forEach(function(x){ t[x.l][1]++; if(x.ok) t[x.l][0]++; }); }); return t; }
+  var KEYS=["1+ gol","2+ gols","3+ gols","Ambos marcam","Favorito venceu","Placar"];
+  function tally(ms){ var t={}; KEYS.forEach(function(k){ t[k]=[0,0,0]; });
+    ms.forEach(function(m){ panorama(m).forEach(function(x){ t[x.l][1]++; t[x.l][2]+=x.pr; if(x.ok) t[x.l][0]++; }); }); return t; }
   var allDone=[]; days.forEach(function(d){ d.matches.map(V).forEach(function(m){ if(hasRes(m)) allDone.push(m); }); });
   hero(main,"Todas as previsões já feitas","Histórico",allDone.length,"jogos encerrados com previsão");
   if (allDone.length){
     var T=tally(allDone), k=el("div","kpis");
     KEYS.forEach(function(key){ if(!T[key][1]) return; var c=el("div","kpi"); c.appendChild(el("h3",null,key));
-      c.appendChild(el("div","big",pct(T[key][0]/T[key][1]))); c.appendChild(el("p",null,T[key][0]+" de "+T[key][1]+" jogos")); k.appendChild(c); });
+      c.appendChild(el("div","big",pct(T[key][0]/T[key][1])));
+      c.appendChild(el("p",null,(key==="Placar"?"placar sugerido certo em ":"aconteceu em ")+T[key][0]+" de "+T[key][1]+" jogos"));
+      c.appendChild(el("p",null,"o app previa "+pct(T[key][2]/T[key][1])+" em média")); k.appendChild(c); });
     main.appendChild(k);
   }
-  main.appendChild(el("p","empty","Seu filtro: “"+mk.short+"” com chance de "+S.thr+"% ou mais (mude na tela Hoje). Nos outros mercados vale a direção da previsão: acima de 50% o app disse “sim”. Toque em um dia para ver jogo a jogo."));
+  main.appendChild(el("p","empty","Cada número mostra quantas vezes aconteceu: 2+ gols conta jogos com 2 gols ou mais, “Favorito venceu” conta as vitórias do time que o app apontou como favorito (empate não conta). Seu filtro: “"+mk.short+"” com chance de "+S.thr+"% ou mais (mude na tela Hoje). Toque em um dia para ver jogo a jogo."));
   var list=el("div","list");
   if (!days.length) list.appendChild(el("p","empty","Ainda não há dias registrados."));
   days.forEach(function(d){
@@ -675,47 +678,29 @@ function viewPerf(main){
   [["7","7 dias"],["30","30 dias"],["90","90 dias"],["all","Tudo"]].forEach(function(x){ var b=el("button",null,x[1]); b.type="button"; b.setAttribute("aria-pressed",String(S.period===x[0]));
     b.addEventListener("click",function(){ S.period=x[0]; route(); }); seg.appendChild(b); });
   main.appendChild(seg);
-  var tw=el("div","filters");
-  var c=el("div"); var l=el("label",null,"Contar como aposta do app a partir de"); l.htmlFor="pThr"; c.appendChild(l);
-  var r=el("input"); r.type="range"; r.id="pThr"; r.min="5"; r.max="99"; r.value=S.thr;
-  var th=el("div","thr"); th.appendChild(el("span",null,"5%")); var out=el("output",null,S.thr+"%"); th.appendChild(out); th.appendChild(el("span",null,"99%"));
-  r.addEventListener("change",function(){ S.thr=+r.value; store.set("thr",S.thr); route(); });
-  r.addEventListener("input",function(){ out.textContent=r.value+"%"; });
-  c.appendChild(r); c.appendChild(th); tw.appendChild(c); main.appendChild(tw);
+  if (!all.length){ main.appendChild(el("p","empty","Ainda não há placares neste período. Os resultados entram automaticamente, em até uma hora depois de cada jogo.")); return; }
 
-  if (!all.length){ main.appendChild(el("p","empty","Ainda não há placares neste período. Os resultados entram automaticamente na manhã seguinte a cada jogo.")); return; }
-
+  main.appendChild(el("p","empty","Todos os jogos com resultado no período. Para cada mercado: quantas vezes aconteceu e quanto o app previa, em média. Quando os dois números ficam próximos, as chances do app estão bem calibradas."));
   var k=el("div","kpis");
-  MARKETS.forEach(function(mk){
-    var base=all.filter(function(m){ return prob(m,mk.id)!=null && hit(m,mk.id)!=null; });
-    var pk=base.filter(function(m){ return prob(m,mk.id)>=thr; });
-    var h=pk.filter(function(m){ return hit(m,mk.id); }).length;
-    var exp=pk.length ? pk.reduce(function(s,m){ return s+prob(m,mk.id); },0)/pk.length : 0;
-    var c=el("div","kpi");
-    c.appendChild(el("h3",null,mk.name));
-    c.appendChild(el("div","big", pk.length ? pct(h/pk.length) : "–"));
-    c.appendChild(el("p",null, pk.length ? h+" acertos em "+pk.length+" jogos com "+S.thr+"% ou mais." : "Nenhum jogo com "+S.thr+"% ou mais neste período."));
-    if (pk.length) c.appendChild(el("p",null,"O app esperava "+pct(exp)+". "+(h/pk.length>=exp-0.03?"Dentro ou acima do esperado.":"Abaixo do esperado.")));
+  [["p1","1 gol ou mais"],["p2","2 gols ou mais"],["p3","3 gols ou mais"],["btts","Ambos marcam"],["fav","Favorito venceu"],["score","Placar sugerido certo"]].forEach(function(x){
+    var base=all.filter(function(m){ return prob(m,x[0])!=null && hit(m,x[0])!=null; });
+    var c=el("div","kpi"); c.appendChild(el("h3",null,x[1]));
+    if (!base.length){ c.appendChild(el("div","big","–")); k.appendChild(c); return; }
+    var h=base.filter(function(m){ return hit(m,x[0]); }).length, rate=h/base.length;
+    var exp=base.reduce(function(a_,m){ return a_+prob(m,x[0]); },0)/base.length;
+    c.appendChild(el("div","big",pct(rate)));
+    c.appendChild(el("p",null,"aconteceu em "+h+" de "+base.length+" jogos"));
+    var diff=rate-exp;
+    c.appendChild(el("p",null,"o app previa "+pct(exp)+" · "+(Math.abs(diff)<0.03?"bem calibrado":(diff>0?"aconteceu mais que o previsto":"aconteceu menos que o previsto"))));
     k.appendChild(c);
   });
-  main.appendChild(k);
-
-  // resultado (1X2) e placar exato, em todos os jogos
-  var withH=all.filter(function(m){ return m.hda; });
-  if (withH.length){
-    var r1=withH.filter(function(m){ var i=m.hda.indexOf(Math.max.apply(null,m.hda)); var o=m.res[0]>m.res[1]?0:(m.res[0]===m.res[1]?1:2); return i===o; }).length;
-    var withS=all.filter(function(m){ return m.sc; });
-    var s1=withS.filter(function(m){ return hit(m,"score"); }).length;
-    var s3=withS.filter(function(m){ return m.sc.some(function(s){ return s[0]===m.res[0]&&s[1]===m.res[1]; }); }).length;
-    var sec=el("div","sect");
-    sec.appendChild(el("h2",null,"Resultado e placar, em todos os jogos"));
-    sec.appendChild(el("p",null,"Aqui não há filtro de chance: vale para todos os jogos com resultado. Para comparação, quem chuta ao acaso acerta cerca de 33% dos resultados e menos de 5% dos placares."));
-    var k2=el("div","kpis");
-    [["Resultado (casa, empate ou fora)",r1,withH.length],["Placar exato (1º palpite)",s1,withS.length],["Placar entre os 3 palpites",s3,withS.length]].forEach(function(x){
-      var c=el("div","kpi"); c.appendChild(el("h3",null,x[0])); c.appendChild(el("div","big",x[2]?pct(x[1]/x[2]):"–")); c.appendChild(el("p",null,x[1]+" de "+x[2]+" jogos")); k2.appendChild(c);
-    });
-    sec.appendChild(k2); main.appendChild(sec);
+  var withS=all.filter(function(m){ return m.sc; });
+  if (withS.length){
+    var s3=withS.filter(function(m){ return m.sc.some(function(z){ return z[0]===m.res[0]&&z[1]===m.res[1]; }); }).length;
+    var c3=el("div","kpi"); c3.appendChild(el("h3",null,"Placar entre os 3 mais prováveis")); c3.appendChild(el("div","big",pct(s3/withS.length)));
+    c3.appendChild(el("p",null,s3+" de "+withS.length+" jogos · ao acaso, menos de 15%")); k.appendChild(c3);
   }
+  main.appendChild(k);
 
   // base x com desfalques (experimental)
   var wa=all.filter(function(m){ return m.adj; });
@@ -756,14 +741,15 @@ function viewPerf(main){
   // por competição
   var s2=el("div","sect");
   s2.appendChild(el("h2",null,"Por competição"));
-  s2.appendChild(el("p",null,"Acertos em “"+mk.short+"” entre os jogos com "+S.thr+"% ou mais."));
-  var t2=table(["Competição","Jogos","Gols por jogo","Acertos"]);
+  s2.appendChild(el("p",null,"Quantas vezes “"+mk.short+"” aconteceu em cada competição, contra o que o app previa (use os botões acima para trocar o mercado)."));
+  var t2=table(["Competição","Jogos","Gols por jogo","Aconteceu","App previa"]);
   var byL={}; all.forEach(function(m){ (byL[m.lg]=byL[m.lg]||[]).push(m); });
   Object.keys(byL).sort(function(a,b){ return byL[b].length-byL[a].length; }).forEach(function(lg){
     var ms=byL[lg], gpg=ms.reduce(function(a,m){ return a+m.res[0]+m.res[1]; },0)/ms.length;
-    var pk=ms.filter(function(m){ var p=prob(m,mk.id); return p!=null&&p>=thr&&hit(m,mk.id)!=null; });
+    var pk=ms.filter(function(m){ return prob(m,mk.id)!=null&&hit(m,mk.id)!=null; });
     var h=pk.filter(function(m){ return hit(m,mk.id); }).length;
-    addRow(t2,[lgName(lg), ms.length, dec(gpg), pk.length ? h+"/"+pk.length+" ("+Math.round(h/pk.length*100)+"%)" : "–"]);
+    var ex=pk.length ? pk.reduce(function(a_,m){ return a_+prob(m,mk.id); },0)/pk.length : null;
+    addRow(t2,[lgName(lg), ms.length, dec(gpg), pk.length ? h+"/"+pk.length+" ("+Math.round(h/pk.length*100)+"%)" : "–", ex==null?"–":Math.round(ex*100)+"%"]);
   });
   s2.appendChild(t2.wrap); main.appendChild(s2);
 }
