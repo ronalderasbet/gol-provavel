@@ -269,6 +269,12 @@ function setStatus(){
     b.appendChild(document.createTextNode(d.error));
     b.style.background="#fbe9e4"; b.style.color="#5a1d12";
   }
+  else if (d.warning){
+    b.hidden=false; b.textContent="";
+    b.appendChild(el("b",null,"Atenção: "));
+    b.appendChild(document.createTextNode(d.warning));
+    b.style.background="#fdf3d6"; b.style.color="#4d3b00";
+  }
   else { b.hidden=true; b.removeAttribute("style"); }
 }
 
@@ -669,6 +675,19 @@ function viewSettings(main){
    ["Requisições restantes hoje", d.quota==null ? "–" : String(d.quota)+" de 100"],
    ["Competições com dados", String(Object.keys(d.leagues||{}).length)]].forEach(function(x){ kv.appendChild(el("span",null,x[0])); kv.appendChild(el("b",null,x[1])); });
   c3.appendChild(kv);
+  var dg=d.diag;
+  if (dg){
+    c3.appendChild(el("h3",null,"Diagnóstico da última atualização")).style.marginTop="1rem";
+    var kv2=el("div","kv");
+    [["Plano da API", dg.plan||"–"], ["Requisições usadas hoje", dg.req||"–"],
+     ["Jogos encontrados hoje", String(dg.found_today)], ["Jogos encontrados amanhã", String(dg.found_tomorrow)],
+     ["Competições com jogos", dg.leagues_found&&dg.leagues_found.length ? dg.leagues_found.join(", ") : "nenhuma"],
+     ["Competições calculadas", dg.leagues_ok&&dg.leagues_ok.length ? dg.leagues_ok.join(", ") : "nenhuma"],
+     ["Competições com falha", dg.leagues_fail&&dg.leagues_fail.length ? dg.leagues_fail.join(", ") : "nenhuma"],
+     ["Previsões calculadas", String(dg.updated)]].forEach(function(x){ kv2.appendChild(el("span",null,x[0])); kv2.appendChild(el("b",null,x[1])); });
+    c3.appendChild(kv2);
+    if (dg.fail_reason) c3.appendChild(el("p","err","Motivo: "+dg.fail_reason));
+  }
   if (R.owner){ var a2=el("div","actions"), lnk=el("a","btn ghost","Ver execuções no GitHub"); lnk.href="https://github.com/"+R.owner+"/"+R.repo+"/actions"; lnk.target="_blank"; lnk.rel="noopener"; a2.appendChild(lnk); c3.appendChild(a2); }
   main.appendChild(c3);
 
