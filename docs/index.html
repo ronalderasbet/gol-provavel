@@ -107,6 +107,19 @@ summary::before{content:"+ "} details[open] summary::before{content:"− "}
 .form{display:inline-flex;gap:3px;vertical-align:middle}
 .form i{font-style:normal;font-weight:700;font-size:.72rem;width:1.35em;height:1.35em;display:inline-grid;place-items:center;border-radius:4px;color:#fff}
 .form i.V{background:var(--good)} .form i.E{background:var(--draw)} .form i.D{background:var(--bad)}
+.chip.up{background:#e5f4e4;color:#14532d} .chip.down{background:#fbebeb;color:#7f1d1d}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .chip.up{background:#173f2a;color:#a7e3bf} :root:not([data-theme="light"]) .chip.down{background:#4a1f1a;color:#f3b3a6} }
+.tlist{margin-top:.6rem}
+.trow{border-top:1px solid var(--line);padding:.75rem 0}
+.trow:last-child{border-bottom:1px solid var(--line)}
+.trow .top{display:flex;justify-content:space-between;align-items:baseline;gap:.6rem}
+.trow .top b{font-weight:600;font-size:1.02rem}
+.trow .top span{color:var(--muted);font-size:.82rem;white-space:nowrap}
+.tm{display:grid;grid-template-columns:5.2rem 1fr auto;gap:.15rem .6rem;font-size:.88rem;margin-top:.35rem;align-items:baseline}
+.tm .k{color:var(--muted)} .tm .d{font-family:"Barlow Condensed",sans-serif;font-weight:700;font-size:1.05rem;text-align:right}
+.tm .d.pos{color:var(--good)} .tm .d.neg{color:var(--bad)}
+.conf{font-size:.74rem;font-weight:600;border-radius:4px;padding:0 .35rem;margin-left:.35rem;white-space:nowrap}
+.conf.c2{background:var(--pitch);color:#fff} .conf.c1{background:var(--pitch-soft);color:var(--ink)}
 .formrow{display:flex;flex-wrap:wrap;gap:.3rem 1rem;margin:.5rem 0 0 4rem;font-size:.82rem;color:var(--muted);align-items:center}
 .empty{padding:1.2rem 0;color:var(--muted)}
 
@@ -286,7 +299,7 @@ function setStatus(){
 function route(){
   var h=(location.hash||"#hoje").slice(1);
   document.querySelectorAll("nav.bottom a").forEach(function(a){
-    var on = a.dataset.v===h || (h.indexOf("dia-")===0 && a.dataset.v==="historico");
+    var on = a.dataset.v===h || (h.indexOf("dia-")===0 && a.dataset.v==="historico") || (h==="times" && a.dataset.v==="desempenho");
     if (on) a.setAttribute("aria-current","page"); else a.removeAttribute("aria-current");
   });
   var main=$("main"); main.textContent="";
@@ -296,6 +309,7 @@ function route(){
   if (h.indexOf("dia-")===0){ var s=h.slice(4); return viewDay(main,s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6,8),"dia"); }
   if (h==="historico") return withMonths(main,viewHistory);
   if (h==="desempenho") return withMonths(main,viewPerf);
+  if (h==="times") return viewTeams(main);
   if (h==="ajustes") return viewSettings(main);
   location.hash="hoje";
 }
@@ -304,6 +318,25 @@ function withMonths(main,fn){
   loadMonths().then(function(){ main.textContent=""; fn(main); });
 }
 window.addEventListener("hashchange",route);
+
+/* ================= times x previsão ================= */
+var MIN_J=8;
+function teamRow(lg,name){
+  var T=S.data&&S.data.teams&&S.data.teams[lg]; if(!T||!name) return null;
+  for (var i=0;i<T.rows.length;i++) if (T.rows[i].t===name) return T.rows[i];
+  return null;
+}
+function confLabel(z){ var a=Math.abs(z); return a>=2?["c2","consistente"]:(a>=1?["c1","tendência"]:null); }
+function teamFlag(r){
+  if (!r || r.j<MIN_J) return null;
+  var c=[["zp",r.zp,"ganha mais pontos que o previsto","ganha menos pontos que o previsto"],
+         ["zg",r.zg,"marca mais que o previsto","marca menos que o previsto"],
+         ["zc",-r.zc,"sofre menos gols que o previsto","sofre mais gols que o previsto"]];
+  c.sort(function(a,b){ return Math.abs(b[1])-Math.abs(a[1]); });
+  var top=c[0]; if (Math.abs(top[1])<2) return null;
+  return {up:top[1]>0, text:top[1]>0?top[2]:top[3]};
+}
+function sgn(x){ var v=(Math.round(x*10)/10).toFixed(1).replace(".",","); return (x>0?"+":"")+v; }
 
 /* ================= tela: dia ================= */
 function hero(main,date,title,tallyN,tallyTxt){
@@ -401,6 +434,12 @@ function card(m,thr){
   var sub=el("div","sub");
   if (m.sc){ sub.appendChild(el("span","chip","Placar provável "+m.sc[0][0]+" x "+m.sc[0][1])); }
   if (S.market==="fav" && m.hda){ sub.appendChild(el("span","chip","Favorito: "+favName(m))); }
+  [m.hk||m.h, m.ak||m.a].forEach(function(nm,i){
+    var fl=teamFlag(teamRow(m.lg,nm)); if(!fl) return;
+    var c=el("span","chip "+(fl.up?"up":"down"),(fl.up?"▲ ":"▼ ")+[m.h,m.a][i]+" "+fl.text);
+    c.title="Na simulação da temporada, a diferença é consistente (não parece acaso).";
+    sub.appendChild(c);
+  });
   if (hasRes(m)){
     var h=hit(m,S.market);
     var r=el("span","chip res "+(h===true?"hit":h===false?"miss":""), "Final "+m.res[0]+" x "+m.res[1]+(h===true?" ✓":h===false?" ✗":""));
@@ -437,6 +476,10 @@ function card(m,thr){
   if (m.sc) rows.push(["Placares mais prováveis", m.sc.map(function(s){ return s[0]+"x"+s[1]+" ("+pct(s[2])+")"; }).join(" · ")]);
   if (m.sh) rows.push([m.h+" na temporada", m.sh[1]+" gols marcados, "+m.sh[2]+" sofridos em "+m.sh[0]+" jogos"]);
   if (m.sa) rows.push([m.a+" na temporada", m.sa[1]+" gols marcados, "+m.sa[2]+" sofridos em "+m.sa[0]+" jogos"]);
+  [[m.h,m.hk||m.h],[m.a,m.ak||m.a]].forEach(function(x){
+    var r=teamRow(m.lg,x[1]); if(!r||r.j<MIN_J) return;
+    rows.push([x[0]+" x previsão", "pontos "+r.pts+" (previsto "+dec(r.xpts).replace(/,?0+$/,"")+", "+sgn(r.pts-r.xpts)+") · gols "+r.gp+" (previsto "+String(r.xgp).replace(".",",")+", "+sgn(r.gp-r.xgp)+")"]);
+  });
   rows.forEach(function(x){ var s=el("div",null,x[0]+": "); s.appendChild(el("b",null,x[1])); g.appendChild(s); });
   det.appendChild(g); d.appendChild(det);
   return d;
@@ -469,11 +512,21 @@ function viewHistory(main){
 }
 
 /* ================= tela: desempenho ================= */
+function perfToggle(main,active){
+  var seg=el("div","seg"); seg.setAttribute("role","group"); seg.setAttribute("aria-label","Tipo de acerto");
+  [["desempenho","Previsões"],["times","Times x previsão"]].forEach(function(x){
+    var b=el("button",null,x[1]); b.type="button"; b.setAttribute("aria-pressed",String(active===x[0]));
+    b.addEventListener("click",function(){ location.hash=x[0]; }); seg.appendChild(b);
+  });
+  main.appendChild(seg);
+}
+
 function viewPerf(main){
   var thr=S.thr/100;
   var from = S.period==="all" ? "0000" : addDays(S.today,-(+S.period));
   var all=[]; allDays().forEach(function(d){ if(d.date>=from) d.matches.forEach(function(m){ if(hasRes(m)) all.push(m); }); });
   hero(main,"Previsões comparadas com os placares reais","Acertos do app",all.length,"jogos com resultado no período");
+  perfToggle(main,"desempenho");
   var seg=el("div","seg");
   [["7","7 dias"],["30","30 dias"],["90","90 dias"],["all","Tudo"]].forEach(function(x){ var b=el("button",null,x[1]); b.type="button"; b.setAttribute("aria-pressed",String(S.period===x[0]));
     b.addEventListener("click",function(){ S.period=x[0]; route(); }); seg.appendChild(b); });
@@ -551,6 +604,48 @@ function viewPerf(main){
     addRow(t2,[lgName(lg), ms.length, dec(gpg), pk.length ? h+"/"+pk.length+" ("+Math.round(h/pk.length*100)+"%)" : "–"]);
   });
   s2.appendChild(t2.wrap); main.appendChild(s2);
+}
+/* ================= tela: times x previsão ================= */
+var TSORT=[["pu","Ganham mais pontos que o previsto"],["pd","Ganham menos pontos que o previsto"],["gu","Marcam mais que o previsto"],["gd","Marcam menos que o previsto"],["cd","Sofrem menos que o previsto"],["cu","Sofrem mais que o previsto"],["pr","Mais previsíveis"]];
+function viewTeams(main){
+  var T=(S.data&&S.data.teams)||{};
+  var lgs=Object.keys(T).filter(function(k){ return T[k].rows&&T[k].rows.some(function(r){return r.j>=MIN_J;}); })
+    .sort(function(a,b){ return lgName(a)<lgName(b)?-1:1; });
+  hero(main,"Quem rende acima ou abaixo do que o modelo prevê","Times x previsão");
+  perfToggle(main,"times");
+  if (!lgs.length){ main.appendChild(el("p","empty","Ainda não há competições com times suficientes. A tabela aparece para as ligas que tiveram jogos recentemente, a partir de "+MIN_J+" jogos por time.")); return; }
+  var lg=store.get("tlg",""); if (lgs.indexOf(lg)<0) lg=lgs[0];
+  var so=store.get("tsort","pu");
+  var f=el("section","filters");
+  var c1=el("div"); var l1=el("label",null,"Competição"); l1.htmlFor="tLg"; c1.appendChild(l1);
+  var s1=el("select"); s1.id="tLg"; lgs.forEach(function(k){ var o=el("option",null,lgName(k)); o.value=k; if(k===lg) o.selected=true; s1.appendChild(o); });
+  s1.addEventListener("change",function(){ store.set("tlg",s1.value); route(); }); c1.appendChild(s1); f.appendChild(c1);
+  var c2=el("div"); var l2=el("label",null,"Ordenar por"); l2.htmlFor="tSo"; c2.appendChild(l2);
+  var s2=el("select"); s2.id="tSo"; TSORT.forEach(function(x){ var o=el("option",null,x[1]); o.value=x[0]; if(x[0]===so) o.selected=true; s2.appendChild(o); });
+  s2.addEventListener("change",function(){ store.set("tsort",s2.value); route(); }); c2.appendChild(s2); f.appendChild(c2);
+  main.appendChild(f);
+  var all=T[lg].rows, rows=all.filter(function(r){ return r.j>=MIN_J; });
+  var key={pu:function(r){return -(r.pts-r.xpts);},pd:function(r){return r.pts-r.xpts;},gu:function(r){return -(r.gp-r.xgp);},gd:function(r){return r.gp-r.xgp;},
+           cd:function(r){return r.gc-r.xgc;},cu:function(r){return -(r.gc-r.xgc);},pr:function(r){return Math.abs(r.zp)+Math.abs(r.zg)+Math.abs(r.zc);}}[so];
+  rows.sort(function(a,b){ return key(a)-key(b); });
+  main.appendChild(el("p","empty","Simulação da temporada: para cada jogo já disputado, o que o modelo teria previsto usando só os jogos anteriores. “Consistente” = diferença grande demais para ser acaso; “tendência” = vale observar."+(all.length>rows.length?" "+(all.length-rows.length)+" time(s) com menos de "+MIN_J+" jogos não aparecem.":"")));
+  var list=el("div","tlist");
+  rows.forEach(function(r){
+    var it=el("div","trow"), top=el("div","top");
+    top.appendChild(el("b",null,r.t)); top.appendChild(el("span",null,r.j+" jogos")); it.appendChild(top);
+    var g=el("div","tm");
+    [["Pontos",r.pts,r.xpts,r.pts-r.xpts,r.zp,false],["Gols feitos",r.gp,r.xgp,r.gp-r.xgp,r.zg,false],["Gols sofridos",r.gc,r.xgc,r.gc-r.xgc,r.zc,true]].forEach(function(x){
+      g.appendChild(el("span","k",x[0]));
+      var mid=el("span",null,x[1]+" · previsto "+String(x[2]).replace(".",","));
+      var cl=confLabel(x[4]); if(cl) mid.appendChild(el("span","conf "+cl[0],cl[1]));
+      g.appendChild(mid);
+      var good = x[5] ? x[3]<0 : x[3]>0;
+      g.appendChild(el("span","d "+(Math.abs(x[3])<0.05?"":(good?"pos":"neg")),sgn(x[3])));
+    });
+    it.appendChild(g); list.appendChild(it);
+  });
+  main.appendChild(list);
+  var at=T[lg].at; if(at) main.appendChild(el("p","empty","Tabela calculada em "+dShort(at)+". É atualizada junto com as estatísticas da liga, a cada 6 horas em dias de jogo."));
 }
 function table(head){
   var wrap=el("div","tblwrap"), t=el("table"), th=el("thead"), tr=el("tr");
