@@ -108,6 +108,16 @@ summary::before{content:"+ "} details[open] summary::before{content:"− "}
 .form i{font-style:normal;font-weight:700;font-size:.72rem;width:1.35em;height:1.35em;display:inline-grid;place-items:center;border-radius:4px;color:#fff}
 .form i.V{background:var(--good)} .form i.E{background:var(--draw)} .form i.D{background:var(--bad)}
 .chip.val{background:#f2c94c;color:#13261d}
+.pan{display:flex;flex-wrap:wrap;gap:.2rem .7rem;margin:.4rem 0 0 4rem;font-size:.8rem}
+.pan span{white-space:nowrap;color:var(--muted)} .pan span.y b{color:var(--good)} .pan span.n b{color:var(--bad)}
+.list a .pan{margin:.3rem 0 0}
+.filt{font-size:.85rem;color:var(--ink);font-weight:600;margin-top:.2rem}
+.injrow{margin:.35rem 0 0 4rem;font-size:.8rem;color:var(--muted);line-height:1.45}
+.injrow b{color:var(--ink);font-weight:600}
+.injlist{margin:.4rem 0 0;padding:0;list-style:none;font-size:.85rem}
+.injlist li{padding:.15rem 0;color:var(--muted)}
+.injlist li b{color:var(--ink);font-weight:600}
+.tag{font-size:.72rem;font-weight:700;border-radius:4px;padding:0 .3rem;margin-left:.3rem;background:var(--pitch-soft);color:var(--ink)}
 .mkline{margin:.15rem 0 0 4rem;font-size:.78rem;color:var(--muted)}
 .otbl{width:100%;border-collapse:collapse;font-size:.85rem;margin-top:.5rem;min-width:0}
 .otbl th,.otbl td{padding:.3rem .35rem;border-bottom:1px solid var(--line);text-align:right}
@@ -167,7 +177,7 @@ th{font-weight:600;color:var(--muted)}
 [hidden]{display:none!important}
 @media (max-width:520px){
   .row{grid-template-columns:2.9rem 1fr auto;gap:.55rem}
-  .hda,.hdal,details,.formrow,.mkline{margin-left:3.45rem}
+  .hda,.hdal,details,.formrow,.mkline,.injrow,.match .pan{margin-left:3.45rem}
   .pct{font-size:1.75rem}
   .btn .lbl{display:none}
 }
@@ -235,7 +245,7 @@ var MARKETS = [
 function mkt(id){ return MARKETS.find(function(m){return m.id===id;}) || MARKETS[0]; }
 function prob(m,id){
   if (id==="fav") return m.hda ? Math.max(m.hda[0],m.hda[2]) : null;
-  if (id==="score") return m.sc ? m.sc[0][2] : null;
+  if (id==="score"){ var sg=sugOf(m); return sg ? sg[2] : null; }
   return m[id]==null ? null : m[id];
 }
 function hasRes(m){ return Array.isArray(m.res); }
@@ -245,7 +255,7 @@ function hit(m,id){
   if (id==="p1") return g>=1; if (id==="p2") return g>=2; if (id==="p3") return g>=3;
   if (id==="btts") return m.btts==null ? null : (h>=1 && a>=1);
   if (id==="fav"){ if(!m.hda) return null; return m.hda[0]>=m.hda[2] ? h>a : a>h; }
-  if (id==="score"){ if(!m.sc) return null; return m.sc[0][0]===h && m.sc[0][1]===a; }
+  if (id==="score"){ var sg=sugOf(m); if(!sg) return null; return sg[0]===h && sg[1]===a; }
   return null;
 }
 function favName(m){ return m.hda ? (m.hda[0]>=m.hda[2] ? m.h : m.a) : ""; }
@@ -326,6 +336,31 @@ function withMonths(main,fn){
   loadMonths().then(function(){ main.textContent=""; fn(main); });
 }
 window.addEventListener("hashchange",route);
+
+/* ================= placar sugerido e panorama ================= */
+function sugOf(m){ return m.sg || (m.sc ? m.sc[0] : null); }
+function panorama(m){
+  if (!hasRes(m)) return [];
+  var x=m.res[0], y=m.res[1], g=x+y, out=[];
+  if (m.p1!=null){ var p1=m.p1>=0.5; out.push({l:"1+ gol",p:p1?"sim":"não",ok:p1===(g>=1)}); }
+  [["p2","2+ gols",g>=2],["p3","3+ gols",g>=3],["btts","Ambos marcam",x>=1&&y>=1]].forEach(function(k){
+    if (m[k[0]]==null) return; var pr=m[k[0]]>=0.5; out.push({l:k[1],p:pr?"sim":"não",ok:pr===k[2]}); });
+  if (m.hda){ var o=m.hda.indexOf(Math.max.apply(null,m.hda)), r=x>y?0:(x===y?1:2); out.push({l:"Resultado",p:["casa","empate","fora"][o],ok:o===r}); }
+  var sg=sugOf(m); if (sg) out.push({l:"Placar",p:sg[0]+"x"+sg[1],ok:sg[0]===x&&sg[1]===y});
+  return out;
+}
+
+/* ================= desfalques ================= */
+var REASONS={"knee injury":"lesão no joelho","hamstring injury":"lesão na coxa","muscle injury":"lesão muscular","ankle injury":"lesão no tornozelo",
+ "groin injury":"lesão na virilha","calf injury":"lesão na panturrilha","thigh injury":"lesão na coxa","back injury":"lesão nas costas","foot injury":"lesão no pé",
+ "shoulder injury":"lesão no ombro","hip injury":"lesão no quadril","achilles tendon injury":"lesão no tendão de Aquiles","injury":"lesão","illness":"doença",
+ "suspended":"suspenso","red card":"suspenso (vermelho)","yellow cards":"suspenso (amarelos)","rest":"poupado","knock":"pancada","concussion":"concussão",
+ "broken leg":"fratura na perna","inactive":"inativo","coach's decision":"opção do técnico","personal reasons":"motivos pessoais","lack of fitness":"sem condição física"};
+function reasonPt(r){ var k=String(r||"").toLowerCase(); return REASONS[k]||k||"motivo não informado"; }
+function shortName(n){ var p=String(n).split(" "); return p.length>1 ? p[p.length-1] : n; }
+function useAdj(){ return store.get("useAdj",false); }
+function V(m){ return (useAdj() && m.adj) ? Object.assign({},m,m.adj,{_adj:true}) : m; }
+function injImportant(p){ return p.att>=0.08 || p.reg; }
 
 /* ================= odds e valor ================= */
 var VALUE_MIN=0.05;
@@ -419,7 +454,7 @@ function viewDay(main,date,kind){
   main.appendChild(top);
   function render(onlyList){
     var thr=S.thr/100, mk=mkt(S.market), q=S.q.trim().toLowerCase();
-    var ms=(day?day.matches:[]).filter(function(m){ return m.res!=="adiado" && (S.lg==="all"||m.lg===S.lg) && (!q || (m.h+" "+m.a).toLowerCase().indexOf(q)>=0); });
+    var ms=(day?day.matches:[]).map(V).filter(function(m){ return m.res!=="adiado" && (S.lg==="all"||m.lg===S.lg) && (!q || (m.h+" "+m.a).toLowerCase().indexOf(q)>=0); });
     var pass=ms.filter(function(m){ var p=prob(m,S.market); return p!=null && p>=thr; });
     var done=pass.filter(hasRes), ok=done.filter(function(m){ return hit(m,S.market); });
     if (!onlyList){
@@ -468,7 +503,7 @@ function card(m,thr){
   row.appendChild(el("div","time",m.t||""));
   var tm=el("div","teams"); tm.appendChild(document.createTextNode(m.h+" x "+m.a));
   var sub=el("div","sub");
-  if (m.sc){ sub.appendChild(el("span","chip","Placar provável "+m.sc[0][0]+" x "+m.sc[0][1])); }
+  var sgc=sugOf(m); if (sgc){ var pc=el("span","chip","Placar sugerido "+sgc[0]+" x "+sgc[1]); pc.title="Placar mais provável dentro do resultado favorito. Os 3 placares individuais mais prováveis estão em “Ver todos os números”."; sub.appendChild(pc); }
   if (S.market==="fav" && m.hda){ sub.appendChild(el("span","chip","Favorito: "+favName(m))); }
   var ok_=oddsKey(m,S.market), oo=oddsOf(m,ok_);
   if (oo){
@@ -503,6 +538,26 @@ function card(m,thr){
     var oh=oddsOf(m,"home"), od=oddsOf(m,"draw"), oa=oddsOf(m,"away");
     if (oh&&od&&oa) d.appendChild(el("div","mkline","Mercado: casa "+pct(oh.p)+" · empate "+pct(od.p)+" · fora "+pct(oa.p)));
   }
+  var pan=panorama(m);
+  if (pan.length){
+    var pr=el("div","pan"); pr.setAttribute("aria-label","Panorama final: "+pan.map(function(x){ return x.l+" "+x.p+(x.ok?" certo":" errado"); }).join(", "));
+    pan.forEach(function(x){ var sp=el("span",x.ok?"y":"n"); sp.appendChild(el("b",null,x.ok?"✓ ":"✗ ")); sp.appendChild(document.createTextNode(x.l+": "+x.p)); pr.appendChild(sp); });
+    d.appendChild(pr);
+  }
+  if (m.inj){
+    var ir=el("div","injrow"), parts=[];
+    [[m.h,m.inj.h],[m.a,m.inj.a]].forEach(function(x){
+      if (!x[1]||!x[1].length) return;
+      var sp=el("span"); sp.appendChild(document.createTextNode("✚ "+shortName(x[0])+": "));
+      var imp=x[1].filter(injImportant).slice(0,2);
+      imp.forEach(function(p,i){ if(i) sp.appendChild(document.createTextNode(", ")); sp.appendChild(el("b",null,shortName(p.n)+(p.t==="Q"?" (dúvida)":""))); });
+      var rest=x[1].length-imp.length; if(rest>0) sp.appendChild(document.createTextNode((imp.length?" +":"")+rest+(imp.length?"":rest>1?" desfalques":" desfalque")));
+      parts.push(sp);
+    });
+    parts.forEach(function(sp,i){ if(i) ir.appendChild(document.createTextNode(" · ")); ir.appendChild(sp); });
+    if (m._adj) ir.appendChild(el("span","tag","previsão com desfalques"));
+    d.appendChild(ir);
+  }
   if (m.fh || m.fa){
     var fr=el("div","formrow");
     [[m.h,m.fh],[m.a,m.fa]].forEach(function(x){
@@ -527,6 +582,24 @@ function card(m,thr){
   });
   rows.forEach(function(x){ var s=el("div",null,x[0]+": "); s.appendChild(el("b",null,x[1])); g.appendChild(s); });
   det.appendChild(g);
+  if (m.inj){
+    [[m.h,m.inj.h],[m.a,m.inj.a]].forEach(function(x){
+      if (!x[1]||!x[1].length) return;
+      det.appendChild(el("p","note","Desfalques de "+x[0]+":"));
+      var ul=el("ul","injlist");
+      x[1].forEach(function(p){ var li=el("li"); li.appendChild(el("b",null,p.n));
+        li.appendChild(document.createTextNode(" — "+(p.t==="M"?"fora":"dúvida")+", "+reasonPt(p.r)+(p.g||p.a?" · "+p.g+" gols, "+p.a+" assist.":"")));
+        if (p.reg) li.appendChild(el("span","tag","titular"));
+        ul.appendChild(li); });
+      det.appendChild(ul);
+    });
+    var A_=m.adj;
+    if (A_){
+      det.appendChild(el("p","note", m._adj
+        ? "Você está vendo a previsão com desfalques (experimental). Desligue em Ajustes para ver a previsão base."
+        : "Com desfalques (experimental): vitória da casa "+pct(A_.hda[0])+" · 3+ gols "+pct(A_.p3)+" · ambos marcam "+pct(A_.btts)+" · gols esperados "+dec(A_.lh)+" x "+dec(A_.la)+". Ative em Ajustes para usar como principal."));
+    }
+  }
   if (m.odds&&m.odds.mk){
     var wrap=el("div","tblwrap"), t=el("table","otbl"), th=el("tr");
     ["Mercado","App","Mercado","Melhor odd","Valor"].forEach(function(x){ th.appendChild(el("th",null,x)); });
@@ -546,23 +619,37 @@ function card(m,thr){
 function viewHistory(main){
   var days=allDays().filter(function(d){ return d.date<=S.today; }).reverse();
   var mk=mkt(S.market), thr=S.thr/100;
-  hero(main,"Todas as previsões já feitas","Histórico",days.length,days.length===1?"dia registrado":"dias registrados");
-  var seg=el("div","seg");
-  MARKETS.forEach(function(m){ var b=el("button",null,m.short); b.type="button"; b.setAttribute("aria-pressed",String(m.id===S.market));
-    b.addEventListener("click",function(){ S.market=m.id; store.set("market",m.id); route(); }); seg.appendChild(b); });
-  main.appendChild(seg);
-  main.appendChild(el("p","empty","Acertos entre os jogos com "+S.thr+"% ou mais em “"+mk.short+"”. Toque em um dia para ver jogo a jogo."));
+  var KEYS=["1+ gol","2+ gols","3+ gols","Ambos marcam","Resultado","Placar"];
+  function tally(ms){ var t={}; KEYS.forEach(function(k){ t[k]=[0,0]; });
+    ms.forEach(function(m){ panorama(m).forEach(function(x){ t[x.l][1]++; if(x.ok) t[x.l][0]++; }); }); return t; }
+  var allDone=[]; days.forEach(function(d){ d.matches.map(V).forEach(function(m){ if(hasRes(m)) allDone.push(m); }); });
+  hero(main,"Todas as previsões já feitas","Histórico",allDone.length,"jogos encerrados com previsão");
+  if (allDone.length){
+    var T=tally(allDone), k=el("div","kpis");
+    KEYS.forEach(function(key){ if(!T[key][1]) return; var c=el("div","kpi"); c.appendChild(el("h3",null,key));
+      c.appendChild(el("div","big",pct(T[key][0]/T[key][1]))); c.appendChild(el("p",null,T[key][0]+" de "+T[key][1]+" jogos")); k.appendChild(c); });
+    main.appendChild(k);
+  }
+  main.appendChild(el("p","empty","Seu filtro: “"+mk.short+"” com chance de "+S.thr+"% ou mais (mude na tela Hoje). Nos outros mercados vale a direção da previsão: acima de 50% o app disse “sim”. Toque em um dia para ver jogo a jogo."));
   var list=el("div","list");
   if (!days.length) list.appendChild(el("p","empty","Ainda não há dias registrados."));
   days.forEach(function(d){
-    var ms=d.matches.filter(function(m){ return m.res!=="adiado"; });
-    var pk=ms.filter(function(m){ var p=prob(m,S.market); return p!=null&&p>=thr; });
-    var done=pk.filter(hasRes), ok=done.filter(function(m){ return hit(m,S.market); });
+    var ms=d.matches.map(V).filter(function(m){ return m.res!=="adiado"; });
+    var done=ms.filter(hasRes);
+    var pk=done.filter(function(m){ var p=prob(m,S.market); return p!=null&&p>=thr; }), ok=pk.filter(function(m){ return hit(m,S.market); });
     var a=el("a"); a.href="#dia-"+d.date.replace(/-/g,"");
     var left=el("div"); left.appendChild(el("b",null,dLong(d.date))); left.appendChild(el("br"));
-    left.appendChild(el("span",null, ms.length+" jogos · "+(done.length ? ok.length+" acertos em "+done.length : (pk.length? pk.length+" no filtro, aguardando placares":"nenhum no filtro"))));
+    var gpg=done.length ? done.reduce(function(s_,m){ return s_+m.res[0]+m.res[1]; },0)/done.length : null;
+    left.appendChild(el("span",null, ms.length+" jogos · "+(done.length ? done.length+" encerrados · "+dec(gpg)+" gols por jogo" : "aguardando placares")));
+    if (done.length){
+      left.appendChild(el("div","filt","Seu filtro ("+mk.short+" ≥ "+S.thr+"%): "+(pk.length ? ok.length+" de "+pk.length : "nenhum jogo")));
+      var T=tally(done), pn=el("div","pan");
+      KEYS.forEach(function(key){ if(!T[key][1]) return; var r=T[key][0]/T[key][1];
+        var sp=el("span",r>=0.5?"y":"n"); sp.appendChild(document.createTextNode(key+" ")); sp.appendChild(el("b",null,T[key][0]+"/"+T[key][1])); pn.appendChild(sp); });
+      left.appendChild(pn);
+    }
     a.appendChild(left);
-    a.appendChild(el("div","rate", done.length ? Math.round(ok.length/done.length*100)+"%" : "–"));
+    a.appendChild(el("div","rate", pk.length ? Math.round(ok.length/pk.length*100)+"%" : "–"));
     list.appendChild(a);
   });
   main.appendChild(list);
@@ -629,6 +716,24 @@ function viewPerf(main){
     });
     sec.appendChild(k2); main.appendChild(sec);
   }
+
+  // base x com desfalques (experimental)
+  var wa=all.filter(function(m){ return m.adj; });
+  var sx=el("div","sect"); sx.appendChild(el("h2",null,"Desfalques ajudam? (experimental)"));
+  if (!wa.length){ sx.appendChild(el("p",null,"Ainda não há jogos encerrados com previsão “com desfalques”. A comparação aparece aqui conforme os jogos terminam; com uns 100 jogos já dá para decidir se o ajuste vira o padrão.")); }
+  else {
+    sx.appendChild(el("p",null,"Erro médio (Brier, menor é melhor) nos "+wa.length+" jogos que tinham desfalques relevantes. Decisão recomendada só com 100 jogos ou mais."));
+    var tx=table(["Mercado","Previsão base","Com desfalques","Melhor"]);
+    [["Resultado",function(p,m){ var o=m.res[0]>m.res[1]?0:(m.res[0]===m.res[1]?1:2); return p.hda.reduce(function(a,v,i){ return a+Math.pow(v-(i===o?1:0),2); },0); }],
+     ["2+ gols",function(p,m){ return Math.pow(p.p2-((m.res[0]+m.res[1])>=2?1:0),2); }],
+     ["3+ gols",function(p,m){ return Math.pow(p.p3-((m.res[0]+m.res[1])>=3?1:0),2); }],
+     ["Ambos marcam",function(p,m){ return Math.pow(p.btts-((m.res[0]>=1&&m.res[1]>=1)?1:0),2); }]].forEach(function(x){
+      var b=0,a=0; wa.forEach(function(m){ b+=x[1](m,m); a+=x[1](m.adj,m); }); b/=wa.length; a/=wa.length;
+      addRow(tx,[x[0],b.toFixed(3).replace(".",","),a.toFixed(3).replace(".",","),Math.abs(a-b)<0.0005?"empate":(a<b?"Com desfalques":"Base")]);
+    });
+    sx.appendChild(tx.wrap);
+  }
+  main.appendChild(sx);
 
   // calibração
   var mk=mkt(S.market);
@@ -879,6 +984,15 @@ function viewSettings(main){
   c2.appendChild(adv);
   main.appendChild(c2);
 
+  // previsão com desfalques
+  var cx=el("section","card"); cx.appendChild(el("h2",null,"Previsão com desfalques (experimental)"));
+  cx.appendChild(el("p",null,"O app calcula, em paralelo, uma previsão que considera os jogadores fora: perde-se metade da parcela de gols dos atacantes ausentes, e goleiro ou zagueiros titulares fora aumentam os gols do adversário. Ainda está em teste: a aba Acertos mostra se ela acerta mais que a previsão base."));
+  var lab=el("label"); lab.style.cssText="display:flex;gap:.6rem;align-items:center;font-weight:600;margin-top:.6rem;cursor:pointer";
+  var cb=el("input"); cb.type="checkbox"; cb.checked=useAdj(); cb.style.cssText="width:1.3rem;height:1.3rem;accent-color:var(--pitch)";
+  cb.addEventListener("change",function(){ store.set("useAdj",cb.checked); toast(cb.checked?"Agora os jogos mostram a previsão com desfalques, quando houver.":"Voltou para a previsão base."); });
+  lab.appendChild(cb); lab.appendChild(document.createTextNode("Usar a previsão com desfalques nas telas de jogos"));
+  cx.appendChild(lab); main.appendChild(cx);
+
   // informações
   var d=S.data||{};
   var c3=el("section","card"); c3.appendChild(el("h2",null,"Informações"));
@@ -899,7 +1013,9 @@ function viewSettings(main){
      ["Competições com falha", dg.leagues_fail&&dg.leagues_fail.length ? dg.leagues_fail.join(", ") : "nenhuma"],
      ["Previsões calculadas", String(dg.updated)],
      ["Jogos com odds", dg.odds_matches==null?"–":String(dg.odds_matches)],
-     ["Ligas sem odds (falha)", dg.odds_fail&&dg.odds_fail.length ? dg.odds_fail.join(", ") : "nenhuma"]].forEach(function(x){ kv2.appendChild(el("span",null,x[0])); kv2.appendChild(el("b",null,x[1])); });
+     ["Ligas sem odds (falha)", dg.odds_fail&&dg.odds_fail.length ? dg.odds_fail.join(", ") : "nenhuma"],
+     ["Jogos com desfalques", dg.inj_matches==null?"–":String(dg.inj_matches)],
+     ["Falha nos desfalques", dg.inj_error||"nenhuma"]].forEach(function(x){ kv2.appendChild(el("span",null,x[0])); kv2.appendChild(el("b",null,x[1])); });
     c3.appendChild(kv2);
     if (dg.fail_reason) c3.appendChild(el("p","err","Motivo: "+dg.fail_reason));
   }
