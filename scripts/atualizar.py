@@ -184,7 +184,7 @@ class APIFootball:
 
     def __init__(self, key):
         self.h = {"x-apisports-key": key}
-        self.calls, self.remaining = 0, None
+        self.calls, self.remaining, self.plan, self.req = 0, None, None, None
 
     def get(self, path, **q):
         js, hd = http_json(self.BASE + path + "?" + urllib.parse.urlencode(q), self.h)
@@ -298,6 +298,8 @@ def pick_provider(today):
                 sub, req = r.get("subscription") or {}, r.get("requests") or {}
                 log("Conta API-Football: plano %s · ativa: %s · requisições hoje: %s de %s"
                     % (sub.get("plan", "?"), sub.get("active", "?"), req.get("current", "?"), req.get("limit_day", "?")))
+                p.plan = sub.get("plan")
+                p.req = "%s de %s" % (req.get("current", "?"), req.get("limit_day", "?"))
                 if js.get("errors"):
                     log("AVISO da API-Football: %s" % json.dumps(js["errors"], ensure_ascii=False))
             except ProviderError as e:
@@ -427,7 +429,7 @@ def main():
     log("Placares registrados: %d" % filled)
 
     # 2) estatísticas (reaproveita por até STATS_MAX_AGE_H horas)
-    stats, force = {}, os.environ.get("FORCE_STATS") == "1"
+    stats, force, fails = {}, os.environ.get("FORCE_STATS") == "1", []
     for f in {(f["lg"], f["season"]): f for d in new_dates for f in fx[d]}.values():
         ck = "%s|%s" % (f["lg"], f["season"])
         c = cache.get(ck)
@@ -438,6 +440,7 @@ def main():
             st = build_stats(prov.finished_in(f))
         except ProviderError as e:
             log("AVISO: sem estatísticas de %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
+            fails.append((LEAGUES[f["lg"]]["name"], str(e)))
             if c:
                 stats[f["lg"]] = c["st"]
             continue
@@ -476,6 +479,22 @@ def main():
 
     cut = (now - timedelta(days=3)).isoformat()
     cache = {k: v for k, v in cache.items() if v["at"] >= cut}
+    found = {d: len(fx.get(d, [])) for d in new_dates}
+    leagues_found = sorted({LEAGUES[f["lg"]]["name"] for d in new_dates for f in fx.get(d, [])})
+    data["diag"] = dict(plan=getattr(prov, "plan", None), req=getattr(prov, "req", None),
+                        found_today=found[new_dates[0]], found_tomorrow=found[new_dates[1]],
+                        leagues_found=leagues_found, leagues_ok=sorted(LEAGUES[k]["name"] for k in stats),
+                        leagues_fail=[n for n, _ in fails], fail_reason=friendly([fails[0][1]]) if fails else None,
+                        added=added, updated=upd)
+    data.pop("warning", None)
+    if sum(found.values()) and not stats:
+        data["error"] = friendly([fails[0][1]]) if fails else "Os jogos foram encontrados, mas não consegui as estatísticas das competições."
+        data["error_at"] = now.strftime("%d/%m às %H:%M")
+    elif fails:
+        data["warning"] = "%d competição(ões) ficaram sem previsão: %s. Motivo: %s" % (len(fails), ", ".join(n for n, _ in fails[:6]), friendly([fails[0][1]]))
+    elif not sum(found.values()):
+        data["warning"] = ("A API respondeu, mas não trouxe nenhum jogo das competições acompanhadas para hoje e amanhã. "
+                           "Se isso se repetir em dias com rodada, o plano da API pode estar limitando as datas.")
     data.update(updated=today, updated_time=now.strftime("%H:%M"), source=prov.name,
                 quota=prov.remaining, version=2)
     save(DATA_PATH, data, indent=None)
