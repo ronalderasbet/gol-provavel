@@ -104,6 +104,10 @@ summary::-webkit-details-marker{display:none}
 summary::before{content:"+ "} details[open] summary::before{content:"− "}
 .det{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.25rem 1.2rem;font-size:.88rem;padding:.5rem 0 .2rem;color:var(--muted)}
 .det b{color:var(--ink);font-weight:600}
+.form{display:inline-flex;gap:3px;vertical-align:middle}
+.form i{font-style:normal;font-weight:700;font-size:.72rem;width:1.35em;height:1.35em;display:inline-grid;place-items:center;border-radius:4px;color:#fff}
+.form i.V{background:var(--good)} .form i.E{background:var(--draw)} .form i.D{background:var(--bad)}
+.formrow{display:flex;flex-wrap:wrap;gap:.3rem 1rem;margin:.5rem 0 0 4rem;font-size:.82rem;color:var(--muted);align-items:center}
 .empty{padding:1.2rem 0;color:var(--muted)}
 
 /* histórico e desempenho */
@@ -143,7 +147,7 @@ th{font-weight:600;color:var(--muted)}
 [hidden]{display:none!important}
 @media (max-width:520px){
   .row{grid-template-columns:2.9rem 1fr auto;gap:.55rem}
-  .hda,.hdal,details{margin-left:3.45rem}
+  .hda,.hdal,details,.formrow{margin-left:3.45rem}
   .pct{font-size:1.75rem}
   .btn .lbl{display:none}
 }
@@ -414,6 +418,17 @@ function card(m,thr){
     var lb=el("div","hdal");
     lb.appendChild(el("span",null,"Casa "+pct(m.hda[0]))); lb.appendChild(el("span",null,"Empate "+pct(m.hda[1]))); lb.appendChild(el("span",null,"Fora "+pct(m.hda[2])));
     d.appendChild(lb);
+  }
+  if (m.fh || m.fa){
+    var fr=el("div","formrow");
+    [[m.h,m.fh],[m.a,m.fa]].forEach(function(x){
+      if (!x[1]) return;
+      var w=el("span"); w.appendChild(document.createTextNode(x[0].split(" ")[0]+" "));
+      var b=el("span","form"); b.setAttribute("aria-label","Forma de "+x[0]+" nos últimos jogos: "+x[1].split("").map(function(c){return c==="V"?"vitória":c==="E"?"empate":"derrota";}).join(", "));
+      x[1].split("").forEach(function(c){ b.appendChild(el("i",c,c)); });
+      w.appendChild(b); fr.appendChild(w);
+    });
+    d.appendChild(fr);
   }
   var det=el("details"); det.appendChild(el("summary",null,"Ver todos os números"));
   var g=el("div","det");
@@ -693,6 +708,7 @@ function viewSettings(main){
 
   var c4=el("section","card"); c4.appendChild(el("h2",null,"Como as previsões são feitas"));
   ["Cada time recebe uma força de ataque e de defesa calculada com os gols da temporada na competição, separando jogos em casa e fora. Com poucos jogos, os números são puxados para a média da liga, para evitar exageros.",
+   "Forma recente: além da temporada atual, o app usa a temporada anterior, e cada jogo vale menos conforme envelhece (um jogo de um ano atrás vale metade de um de hoje). Esse ajuste foi escolhido testando 22 temporadas reais de 8 ligas: melhorou todas as previsões, principalmente no começo das temporadas. Os quadradinhos V, E e D mostram os 5 últimos resultados de cada time.",
    "Com isso o app estima quantos gols cada time deve marcar e calcula a chance de cada placar possível (de 0x0 a 10x10). Uma correção estatística conhecida como Dixon-Coles ajusta a frequência de placares baixos, como 0x0 e 1x1.",
    "Todas as chances saem dessa tabela de placares: vitória, empate, derrota, número de gols e ambos marcam. A previsão de cada jogo fica congelada quando a bola rola, e a aba Acertos compara tudo com o placar real, sem retoques.",
    "Escalações, lesões e motivação não entram no cálculo. É uma estimativa estatística, não uma garantia. Se for apostar, aposte só o que pode perder."].forEach(function(t){ c4.appendChild(el("p",null,t)); });
