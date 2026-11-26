@@ -25,7 +25,7 @@ DATA_PATH = os.path.join(DOCS, "data.json")
 CACHE_PATH = os.path.join(DOCS, "cache.json")
 HIST_DIR = os.path.join(DOCS, "history")
 RECENT_DAYS = 14          # dias mantidos com todos os detalhes em data.json
-STATS_MAX_AGE_H = 10      # estatísticas de liga reaproveitadas por até 10 horas (economiza requisições)
+STATS_MAX_AGE_H = 6       # estatísticas de liga renovadas a cada 6 horas
 RHO = -0.08               # correção de Dixon-Coles para placares baixos
 
 # ---------------------------------------------------------------------------
