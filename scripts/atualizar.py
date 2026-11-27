@@ -533,11 +533,29 @@ def pick_provider(today):
             return p, {today: fx}
         except ProviderError as e:
             errs.append("%s: %s" % (p.name, e)); log("AVISO: %s falhou -> %s" % (p.name, e))
-    raise SourceFailure(friendly(errs))
+    err = SourceFailure(friendly(errs))
+    err.key = friendly_key(errs)
+    raise err
 
 
 class SourceFailure(Exception):
     pass
+
+
+def friendly_key(errs):
+    """Código do erro, para o app traduzir a mensagem para o idioma do usuário."""
+    raw = " | ".join(errs).lower()
+    if not errs:
+        return "nokey"
+    if "season" in raw or "free plan" in raw:
+        return "season"
+    if "token" in raw or "application key" in raw or "key" in raw and ("invalid" in raw or "missing" in raw) or "401" in raw or "403" in raw:
+        return "badkey"
+    if "limit" in raw or "requests" in raw or "429" in raw:
+        return "limit"
+    if "conex" in raw or "timed out" in raw or "http 5" in raw:
+        return "conn"
+    return "other"
 
 
 def friendly(errs):
@@ -628,12 +646,13 @@ def main():
         prov, fx = pick_provider(today)
     except SourceFailure as e:
         log("PROBLEMA: %s" % e)
-        data.update(error=str(e), error_at=now.strftime("%d/%m às %H:%M"))
+        data.update(error=str(e), error_key=getattr(e, "key", "other"), error_params={}, error_at=now.strftime("%d/%m às %H:%M"))
         data.setdefault("updated", today)
         save(DATA_PATH, data, indent=None)
         log("O site será publicado mesmo assim, mostrando este aviso dentro do app.")
         return
-    data.pop("error", None); data.pop("error_at", None)
+    for k in ("error", "error_at", "error_key", "error_params"):
+        data.pop(k, None)
     for date in pending + new_dates:
         if date not in fx:
             try:
@@ -823,15 +842,21 @@ def main():
                         leagues_fail=[n for n, _ in fails], fail_reason=friendly([fails[0][1]]) if fails else None,
                         added=added, updated=upd, odds_matches=with_odds, odds_fail=odds_fail,
                         inj_matches=with_inj, inj_error=inj_err)
-    data.pop("warning", None)
+    for k in ("warning", "warning_key", "warning_params"):
+        data.pop(k, None)
     if sum(found.values()) and not stats:
         data["error"] = friendly([fails[0][1]]) if fails else "Os jogos foram encontrados, mas não consegui as estatísticas das competições."
+        data["error_key"] = friendly_key([fails[0][1]]) if fails else "other"
+        data["error_params"] = {}
         data["error_at"] = now.strftime("%d/%m às %H:%M")
     elif fails:
-        data["warning"] = "%d competição(ões) ficaram sem previsão: %s. Motivo: %s" % (len(fails), ", ".join(n for n, _ in fails[:6]), friendly([fails[0][1]]))
+        names = ", ".join(n for n, _ in fails[:6])
+        data["warning"] = "%d competição(ões) ficaram sem previsão: %s. Motivo: %s" % (len(fails), names, friendly([fails[0][1]]))
+        data["warning_key"], data["warning_params"] = "partial", {"n": len(fails), "list": names}
     elif not sum(found.values()):
         data["warning"] = ("A API respondeu, mas não trouxe nenhum jogo das competições acompanhadas para hoje e amanhã. "
                            "Se isso se repetir em dias com rodada, o plano da API pode estar limitando as datas.")
+        data["warning_key"], data["warning_params"] = "nogames", {}
     data.update(updated=today, updated_time=now.strftime("%H:%M"), source=prov.name,
                 quota=prov.remaining, version=2)
     save(DATA_PATH, data, indent=None)
