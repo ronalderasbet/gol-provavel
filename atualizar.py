@@ -34,9 +34,17 @@ VALUE_MIN = 0.05          # destaque de "valor" a partir de +5% (chance do app �
 INJ_MAX_AGE_H = 3         # desfalques: renovados a cada 3 horas
 PLAYER_MAX_AGE_D = 7      # estatísticas de jogadores desfalcados: renovadas a cada 7 dias
 PLAYER_CALLS_MAX = 150    # teto de consultas de jogadores por execução (protege a cota)
+STRENGTH_STRETCH = 1.10   # estica 10% a diferença de força entre os times: corrige o favorito subestimado nos
+                          # confrontos desiguais (ajustado em 2024-25, confirmado em 2025-26)
+TB_MIN_GAMES = 5          # sinal "Top 3 x 5 últimos" só depois de cada time ter 5 jogos na temporada
+TB_EXCLUDE = {"ucl", "uel", "uecl", "cdb", "lib", "sud"}   # copas: sem tabela de pontos corridos
 GOALS_SHRINK = 0.19       # puxa o total de gols esperado 19% para a média da liga (corrige excesso de confiança
                           # nos mercados de gols; ajustado em 2024-25 e confirmado em 2025-26, 4.706 jogos)
 # (meia-vida e uso da temporada anterior escolhidos por teste em 22 temporadas reais, 6.846 jogos)
+MIX_W = 0.5               # previsão combinada (experimental): metade modelo atual, metade Dixon-Coles completo
+DC_TAU = 8.0              # Dixon-Coles completo: força do puxão para a média (≈ 8 jogos de "time médio")
+DC_HALF_LIFE = 365        # Dixon-Coles completo: meia-vida dos jogos, em dias
+# (teste em 22 temporadas: a mistura empatou em 2024-25 e melhorou 2025-26, 2023-24 e o Brasileirão 2025)
 
 # ---------------------------------------------------------------------------
 # Competições. af = id na API-Football; country/names = plano B para achar a liga pelo nome;
@@ -131,7 +139,7 @@ def build_stats(rows, ref=None, half_life=None):
     for team, e in t.items():
         e["w"] = [round(v, 3) for v in e["w"]]
         e["f"] = "".join(r for _, r in sorted(hist[team])[-5:])
-    return dict(teams=t, n=len(rows), gh=gh, ga=ga, v=2)
+    return dict(teams=t, n=len(rows), gh=gh, ga=ga, v=3)
 
 
 def league_means(key, st):
@@ -161,8 +169,78 @@ def predict(key, st, home, away):
     if tot > 0:
         f = (mean_tot + (1 - GOALS_SHRINK) * (tot - mean_tot)) / tot
         lh, la = lh * f, la * f
+    if lh > 0 and la > 0 and STRENGTH_STRETCH != 1:
+        tot, r = lh + la, (lh / la) ** STRENGTH_STRETCH
+        lh = tot * r / (1 + r)
+        la = tot - lh
     lh, la = min(5.0, max(0.15, lh)), min(5.0, max(0.15, la))
     return dict(score_model(lh, la), sh=th.get("c", th["r"][:3]), sa=ta.get("c", ta["r"][:3]), fh=th.get("f", ""), fa=ta.get("f", ""))
+
+
+def fit_dc(rows, ref, half_life=DC_HALF_LIFE, tau=DC_TAU):
+    """Dixon-Coles completo: acha ao mesmo tempo o ataque e a defesa de todos os times da liga que melhor
+    explicam os placares, cada gol comparado com a força de quem estava do outro lado.
+    Jogos antigos pesam menos (meia-vida) e cada força é puxada para a média (tau), como no modelo atual."""
+    R = []
+    for row in rows:
+        h, a, x, y = row[:4]
+        d = row[4] if len(row) > 4 else None
+        w = 0.5 ** (max(0, _days(ref, d)) / half_life) if (half_life and d) else 1.0
+        R.append((h, a, x, y, w))
+    teams = sorted({r[0] for r in R} | {r[1] for r in R})
+    if len(R) < 10 or len(teams) < 4:
+        return None
+    att = {t: 0.0 for t in teams}; dfn = {t: 0.0 for t in teams}
+    c, ha = 0.25, 0.15
+    for _ in range(80):
+        mx = 0.0
+        for which in ("att", "dfn", "c"):
+            oS = dict.fromkeys(teams, 0.0); eS = dict.fromkeys(teams, 0.0)
+            oC = dict.fromkeys(teams, 0.0); eC = dict.fromkeys(teams, 0.0)
+            sx = sy = slh = sla = 0.0
+            for h, a, x, y, w in R:
+                lh = math.exp(c + ha + att[h] - dfn[a]); la = math.exp(c + att[a] - dfn[h])
+                oS[h] += w * x; eS[h] += w * lh; oS[a] += w * y; eS[a] += w * la
+                oC[a] += w * x; eC[a] += w * lh; oC[h] += w * y; eC[h] += w * la
+                sx += w * x; sy += w * y; slh += w * lh; sla += w * la
+            if which == "att":
+                for t in teams:
+                    st = (oS[t] - eS[t] - tau * att[t]) / (eS[t] + tau); att[t] += st; mx = max(mx, abs(st))
+            elif which == "dfn":
+                for t in teams:
+                    st = (eC[t] - oC[t] - tau * dfn[t]) / (eC[t] + tau); dfn[t] += st; mx = max(mx, abs(st))
+            elif slh + sla > 0 and sx + sy > 0:
+                st = math.log((sx + sy) / (slh + sla)); c += st; mx = max(mx, abs(st))
+                if sx > 0 and slh > 0:
+                    s2 = math.log((sx / slh) / ((sx + sy) / (slh + sla))); ha += s2; mx = max(mx, abs(s2))
+        if mx < 1e-5:
+            break
+    return dict(c=round(c, 5), ha=round(ha, 5), att={t: round(v, 5) for t, v in att.items()},
+                dfn={t: round(v, 5) for t, v in dfn.items()})
+
+
+def predict_mix(key, st, home, away, base):
+    """Previsão combinada (experimental): média das tabelas de placares do modelo atual e do Dixon-Coles completo.
+    base = resultado de predict() para o mesmo jogo. Devolve None quando a liga ainda não tem o ajuste."""
+    dc = st.get("dc")
+    if not dc or "lh" not in base:
+        return None
+    lh = math.exp(dc["c"] + dc["ha"] + dc["att"].get(home, 0.0) - dc["dfn"].get(away, 0.0))
+    la = math.exp(dc["c"] + dc["att"].get(away, 0.0) - dc["dfn"].get(home, 0.0))
+    muH, muA = league_means(key, st)
+    tot, mean_tot = lh + la, muH + muA
+    if tot > 0:
+        f = (mean_tot + (1 - GOALS_SHRINK) * (tot - mean_tot)) / tot
+        lh, la = lh * f, la * f
+    if lh > 0 and la > 0 and STRENGTH_STRETCH != 1:
+        tot, r = lh + la, (lh / la) ** STRENGTH_STRETCH
+        lh = tot * r / (1 + r)
+        la = tot - lh
+    lh, la = min(5.0, max(0.15, lh)), min(5.0, max(0.15, la))
+    M1, M2 = score_matrix(base["lh"], base["la"]), score_matrix(lh, la)
+    M = [[(1 - MIX_W) * p + MIX_W * q for p, q in zip(r1, r2)] for r1, r2 in zip(M1, M2)]
+    out = score_model((1 - MIX_W) * base["lh"] + MIX_W * lh, (1 - MIX_W) * base["la"] + MIX_W * la, M=M)
+    return {k: out[k] for k in ("lh", "la", "p1", "p2", "p3", "btts", "hda", "sc", "sg")}
 
 
 def _median(xs):
@@ -267,6 +345,35 @@ def injury_adjust(m, inj, stats_lg):
     return score_model(min(5.0, max(0.15, lh)), min(5.0, max(0.15, la)))
 
 
+def standings(rows):
+    """Classificação por pontos, saldo e gols marcados: {time: [posição, jogos]}."""
+    t = {}
+    for h, a, x, y, *_ in rows:
+        for team, gf, gc in ((h, x, y), (a, y, x)):
+            e = t.setdefault(team, [0, 0, 0, 0])
+            e[0] += 3 if gf > gc else (1 if gf == gc else 0); e[1] += gf - gc; e[2] += gf; e[3] += 1
+    order = sorted(t, key=lambda k: (-t[k][0], -t[k][1], -t[k][2]))
+    return {team: [i + 1, t[team][3]] for i, team in enumerate(order)}
+
+
+def top_bottom(key, st, home, away):
+    """Sinal de jogo desigual: 'home' = Top 3 em casa contra um dos 5 últimos; 'away' = Top 3 visitando um dos 5 últimos."""
+    if key in TB_EXCLUDE or not st or not st.get("rank"):
+        return None, None
+    rk, n = st["rank"], len(st["rank"])
+    if home not in rk or away not in rk or n < 10:
+        return None, None
+    (rh, gh), (ra, ga) = rk[home], rk[away]
+    pos = [rh, ra, n]
+    if gh < TB_MIN_GAMES or ga < TB_MIN_GAMES:
+        return None, pos
+    if rh <= 3 and ra >= n - 4:
+        return "home", pos
+    if ra <= 3 and rh >= n - 4:
+        return "away", pos
+    return None, pos
+
+
 def team_table(key, prev_rows, cur_rows):
     """Simulação da temporada: para cada jogo já encerrado, calcula o que o modelo teria previsto
     usando só os jogos anteriores a ele, e compara com o que aconteceu, time por time."""
@@ -297,13 +404,17 @@ def team_table(key, prev_rows, cur_rows):
     return sorted(out, key=lambda r: -(r["pts"] - r["xpts"]))
 
 
-def score_model(lh, la, N=10):
+def score_matrix(lh, la, N=10):
     pois = lambda l, n: math.exp(-l) * l ** n / math.factorial(n)
     M = [[pois(lh, i) * pois(la, j) for j in range(N + 1)] for i in range(N + 1)]
     M[0][0] *= max(0.0, 1 - lh * la * RHO); M[0][1] *= max(0.0, 1 + lh * RHO)
     M[1][0] *= max(0.0, 1 + la * RHO);     M[1][1] *= max(0.0, 1 - RHO)
     tot = sum(map(sum, M))
-    M = [[x / tot for x in row] for row in M]
+    return [[x / tot for x in row] for row in M]
+
+
+def score_model(lh, la, N=10, M=None):
+    M = M or score_matrix(lh, la, N)
     cells = [(M[i][j], i, j) for i in range(N + 1) for j in range(N + 1)]
     P = lambda f: sum(p for p, i, j in cells if f(i, j))
     top = sorted(cells, reverse=True)[:3]
@@ -382,7 +493,8 @@ class APIFootball:
             ft = (f.get("score") or {}).get("fulltime") or {}
             res = [ft["home"], ft["away"]] if st in self.FINISHED and ft.get("home") is not None else ("adiado" if st in self.VOID else None)
             out.append(dict(fid="af%d" % f["fixture"]["id"], lg=key, lid=lg["id"], season=lg["season"], ko=f["fixture"]["date"],
-                            h=f["teams"]["home"]["name"], a=f["teams"]["away"]["name"], res=res))
+                            h=f["teams"]["home"]["name"], a=f["teams"]["away"]["name"], res=res,
+                            hid=f["teams"]["home"].get("id"), aid=f["teams"]["away"].get("id")))
         return out
 
     def injuries(self, fids):
@@ -533,11 +645,29 @@ def pick_provider(today):
             return p, {today: fx}
         except ProviderError as e:
             errs.append("%s: %s" % (p.name, e)); log("AVISO: %s falhou -> %s" % (p.name, e))
-    raise SourceFailure(friendly(errs))
+    err = SourceFailure(friendly(errs))
+    err.key = friendly_key(errs)
+    raise err
 
 
 class SourceFailure(Exception):
     pass
+
+
+def friendly_key(errs):
+    """Código do erro, para o app traduzir a mensagem para o idioma do usuário."""
+    raw = " | ".join(errs).lower()
+    if not errs:
+        return "nokey"
+    if "season" in raw or "free plan" in raw:
+        return "season"
+    if "token" in raw or "application key" in raw or "key" in raw and ("invalid" in raw or "missing" in raw) or "401" in raw or "403" in raw:
+        return "badkey"
+    if "limit" in raw or "requests" in raw or "429" in raw:
+        return "limit"
+    if "conex" in raw or "timed out" in raw or "http 5" in raw:
+        return "conn"
+    return "other"
 
 
 def friendly(errs):
@@ -583,7 +713,7 @@ def link(existing, f):
     return best if score >= 0.6 else None
 
 
-COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj")
+COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj", "mix", "tb", "pos", "hid", "aid")
 
 
 def archive(data):
@@ -628,12 +758,13 @@ def main():
         prov, fx = pick_provider(today)
     except SourceFailure as e:
         log("PROBLEMA: %s" % e)
-        data.update(error=str(e), error_at=now.strftime("%d/%m às %H:%M"))
+        data.update(error=str(e), error_key=getattr(e, "key", "other"), error_params={}, error_at=now.strftime("%d/%m às %H:%M"))
         data.setdefault("updated", today)
         save(DATA_PATH, data, indent=None)
         log("O site será publicado mesmo assim, mostrando este aviso dentro do app.")
         return
-    data.pop("error", None); data.pop("error_at", None)
+    for k in ("error", "error_at", "error_key", "error_params"):
+        data.pop(k, None)
     for date in pending + new_dates:
         if date not in fx:
             try:
@@ -656,7 +787,7 @@ def main():
     for f in {(f["lg"], f["season"]): f for d in new_dates for f in fx[d]}.values():
         ck = "%s|%s" % (f["lg"], f["season"])
         c = cache.get(ck)
-        fresh = c and c.get("st", {}).get("v") == 2 and (now - datetime.fromisoformat(c["at"])).total_seconds() < STATS_MAX_AGE_H * 3600
+        fresh = c and c.get("st", {}).get("v") == 3 and (now - datetime.fromisoformat(c["at"])).total_seconds() < STATS_MAX_AGE_H * 3600
         if fresh and not force:
             stats[f["lg"]] = c["st"]; continue
         prev_rows = []
@@ -680,15 +811,22 @@ def main():
             for team, e in st["teams"].items():
                 e["c"] = cur_only.get(team, {"r": [0, 0, 0]})["r"][:3]   # só a temporada atual, para exibir
             st["n_cur"] = len(cur_rows)
+            st["rank"] = standings(cur_rows)
             try:  # estatística "times x previsão" (simulação da temporada); nunca derruba a atualização
                 data.setdefault("teams", {})[f["lg"]] = {"at": today, "rows": team_table(f["lg"], prev_rows, cur_rows)}
             except Exception as e:  # noqa: BLE001
                 log("Aviso: não consegui montar a tabela de times de %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
             st["obs_cur"] = round(sum(r[2] + r[3] for r in cur_rows) / len(cur_rows), 2) if cur_rows else None
+            try:  # previsão combinada (experimental); nunca derruba a atualização
+                dc = fit_dc(prev_rows + cur_rows, now.isoformat())
+                if dc:
+                    st["dc"] = dc
+            except Exception as e:  # noqa: BLE001
+                log("Aviso: sem previsão combinada para %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
         except ProviderError as e:
             log("AVISO: sem estatísticas de %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
             fails.append((LEAGUES[f["lg"]]["name"], str(e)))
-            if c and c.get("st", {}).get("v") == 2:
+            if c and c.get("st", {}).get("v") == 3:
                 stats[f["lg"]] = c["st"]
             continue
         stats[f["lg"]] = st
@@ -713,10 +851,23 @@ def main():
                 day["matches"].append(m); added += 1
             ko = datetime.fromisoformat(f["ko"])
             m.update(fid=f["fid"], ko=f["ko"], hk=f["h"], ak=f["a"], t=ko.astimezone(TZ).strftime("%H:%M"))
+            if f.get("hid") and f.get("aid"):   # ids dos times na API-Football: o app mostra os escudos
+                m["hid"], m["aid"] = f["hid"], f["aid"]
             if f["res"] is not None:
                 m["res"] = f["res"]
             if ko > now and f["lg"] in stats:
                 m.update(predict(f["lg"], stats[f["lg"]], f["h"], f["a"])); upd += 1
+                mix = predict_mix(f["lg"], stats[f["lg"]], f["h"], f["a"], m)
+                if mix:
+                    m["mix"] = mix
+                else:
+                    m.pop("mix", None)
+                tb, pos = top_bottom(f["lg"], stats[f["lg"]], f["h"], f["a"])
+                m["pos"] = pos
+                if tb:
+                    m["tb"] = tb
+                else:
+                    m.pop("tb", None)
     log("Jogos novos: %d · previsões calculadas: %d" % (added, upd))
 
     # 4) odds das casas (só antes do apito; ficam congeladas depois, como as previsões)
@@ -823,15 +974,23 @@ def main():
                         leagues_fail=[n for n, _ in fails], fail_reason=friendly([fails[0][1]]) if fails else None,
                         added=added, updated=upd, odds_matches=with_odds, odds_fail=odds_fail,
                         inj_matches=with_inj, inj_error=inj_err)
-    data.pop("warning", None)
+    # placar ao vivo e notificações: endereço do serviço na Cloudflare (variável LIVE_URL do GitHub)
+    data["live_url"] = os.environ.get("LIVE_URL", "").strip().rstrip("/") or None
+    for k in ("warning", "warning_key", "warning_params"):
+        data.pop(k, None)
     if sum(found.values()) and not stats:
         data["error"] = friendly([fails[0][1]]) if fails else "Os jogos foram encontrados, mas não consegui as estatísticas das competições."
+        data["error_key"] = friendly_key([fails[0][1]]) if fails else "other"
+        data["error_params"] = {}
         data["error_at"] = now.strftime("%d/%m às %H:%M")
     elif fails:
-        data["warning"] = "%d competição(ões) ficaram sem previsão: %s. Motivo: %s" % (len(fails), ", ".join(n for n, _ in fails[:6]), friendly([fails[0][1]]))
+        names = ", ".join(n for n, _ in fails[:6])
+        data["warning"] = "%d competição(ões) ficaram sem previsão: %s. Motivo: %s" % (len(fails), names, friendly([fails[0][1]]))
+        data["warning_key"], data["warning_params"] = "partial", {"n": len(fails), "list": names}
     elif not sum(found.values()):
         data["warning"] = ("A API respondeu, mas não trouxe nenhum jogo das competições acompanhadas para hoje e amanhã. "
                            "Se isso se repetir em dias com rodada, o plano da API pode estar limitando as datas.")
+        data["warning_key"], data["warning_params"] = "nogames", {}
     data.update(updated=today, updated_time=now.strftime("%H:%M"), source=prov.name,
                 quota=prov.remaining, version=2)
     save(DATA_PATH, data, indent=None)
