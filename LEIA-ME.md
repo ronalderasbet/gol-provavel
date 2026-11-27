@@ -1,4 +1,4 @@
-# Gol Provável — guia de instalação (sem programar nada)
+# FootPrevia — guia de instalação (sem programar nada)
 
 Você vai fazer isto **uma vez só**, leva uns 20 minutos. Depois o app se atualiza sozinho
 todo dia às 7h e às 12h, e você abre pelo ícone no celular.
