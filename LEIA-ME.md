@@ -68,6 +68,51 @@ Pronto! Seu app está em:
 Abra o link acima no celular e toque em **Ajustes** (no app). Lá tem o passo a passo
 para iPhone e Android, e também como ativar o botão **Atualizar** para buscar dados na hora.
 
+## Parte 8 — Placar ao vivo e notificações (opcional, 15 min)
+
+O placar ao vivo e as notificações dos seus times usam um pequeno serviço grátis na Cloudflare,
+que confere os jogos a cada minuto. Sem ele, o app continua funcionando normalmente.
+
+**8.1 Criar a conta e o serviço**
+
+1. Abra **https://dash.cloudflare.com/sign-up** e crie uma conta grátis.
+2. No menu da esquerda: **Compute (Workers) → Workers & Pages → Create → Create Worker** (modelo "Hello World").
+3. Em **Worker name**, escreva: `gol-provavel-live`. Clique em **Deploy**.
+4. Clique em **Edit code**. Apague tudo, abra o arquivo `worker.js` (veio junto) num bloco de notas,
+   copie tudo e cole. Clique em **Deploy**.
+
+**8.2 Criar o banco de dados**
+
+1. No menu da esquerda: **Storage & Databases → D1 SQL Database → Create**.
+2. Nome: `gol-provavel`. Clique em **Create**.
+
+**8.3 Ligar tudo ao serviço** (volte em Workers & Pages → gol-provavel-live → **Settings**)
+
+1. **Bindings → Add → D1 database**. Variable name: `DB`. Database: `gol-provavel`. **Add binding**.
+2. **Variables and Secrets → Add**:
+   - Type **Secret**, Name `APIFOOTBALL_KEY`, Value: a mesma chave da API-Football da Parte 1.
+   - Type **Text**, Name `SITE_URL`, Value: `https://SEU-USUARIO.github.io/gol-provavel/`
+   - Clique em **Deploy**.
+3. **Trigger Events → Add → Cron Triggers**. Escolha **Every minute** (ou escreva `* * * * *`). **Add**.
+
+**8.4 Avisar o app**
+
+1. No alto da página do Worker aparece o endereço dele, algo como
+   `https://gol-provavel-live.SEU-NOME.workers.dev`. Copie.
+2. No GitHub: **Settings → Secrets and variables → Actions → aba Variables → New repository variable**.
+   Name: `LIVE_URL`. Value: o endereço copiado. **Add variable**.
+3. **Actions → Atualizar gol provável → Run workflow** e espere o ✔ verde.
+
+**8.5 Conferir**
+
+- No app, **Ajustes → Informações → Serviço ao vivo** deve mostrar "ativo".
+- Siga um time (num jogo, "Ver todos os números" → ♡ Seguir) e toque em **Ajustes → Ativar notificações**.
+  Chega uma notificação de teste.
+- No iPhone, as notificações só funcionam com o app instalado na tela de início (iOS 16.4 ou mais novo).
+
+O serviço usa a mesma cota da API-Football, só nos minutos em que há jogo das 28 competições:
+em média umas 1.000 consultas por dia, bem abaixo das 7.500 do plano Pro.
+
 ---
 
 ## Se algo der errado
@@ -78,6 +123,8 @@ para iPhone e Android, e também como ativar o botão **Atualizar** para buscar 
 | "Free plans do not have access to this season" | O plano grátis da API-Football não liberou a temporada atual. Cadastre a chave reserva (Parte 4, passo 4). |
 | O link do site dá "404" | Confira a Parte 5 e rode a Parte 6 de novo. |
 | Um jogo ficou sem placar | O app tenta de novo sozinho por 7 dias. |
+| "Serviço ao vivo: com erro" em Ajustes | Confira na Cloudflare a chave `APIFOOTBALL_KEY` e o `SITE_URL` (Parte 8.3). |
+| Notificação de teste não chega | Confira se as notificações do navegador estão liberadas para o site e se o celular não está em modo "não perturbe". |
 
 ## Competições acompanhadas
 
