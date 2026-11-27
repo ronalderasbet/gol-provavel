@@ -41,6 +41,10 @@ TB_EXCLUDE = {"ucl", "uel", "uecl", "cdb", "lib", "sud"}   # copas: sem tabela d
 GOALS_SHRINK = 0.19       # puxa o total de gols esperado 19% para a média da liga (corrige excesso de confiança
                           # nos mercados de gols; ajustado em 2024-25 e confirmado em 2025-26, 4.706 jogos)
 # (meia-vida e uso da temporada anterior escolhidos por teste em 22 temporadas reais, 6.846 jogos)
+MIX_W = 0.5               # previsão combinada (experimental): metade modelo atual, metade Dixon-Coles completo
+DC_TAU = 8.0              # Dixon-Coles completo: força do puxão para a média (≈ 8 jogos de "time médio")
+DC_HALF_LIFE = 365        # Dixon-Coles completo: meia-vida dos jogos, em dias
+# (teste em 22 temporadas: a mistura empatou em 2024-25 e melhorou 2025-26, 2023-24 e o Brasileirão 2025)
 
 # ---------------------------------------------------------------------------
 # Competições. af = id na API-Football; country/names = plano B para achar a liga pelo nome;
@@ -171,6 +175,72 @@ def predict(key, st, home, away):
         la = tot - lh
     lh, la = min(5.0, max(0.15, lh)), min(5.0, max(0.15, la))
     return dict(score_model(lh, la), sh=th.get("c", th["r"][:3]), sa=ta.get("c", ta["r"][:3]), fh=th.get("f", ""), fa=ta.get("f", ""))
+
+
+def fit_dc(rows, ref, half_life=DC_HALF_LIFE, tau=DC_TAU):
+    """Dixon-Coles completo: acha ao mesmo tempo o ataque e a defesa de todos os times da liga que melhor
+    explicam os placares, cada gol comparado com a força de quem estava do outro lado.
+    Jogos antigos pesam menos (meia-vida) e cada força é puxada para a média (tau), como no modelo atual."""
+    R = []
+    for row in rows:
+        h, a, x, y = row[:4]
+        d = row[4] if len(row) > 4 else None
+        w = 0.5 ** (max(0, _days(ref, d)) / half_life) if (half_life and d) else 1.0
+        R.append((h, a, x, y, w))
+    teams = sorted({r[0] for r in R} | {r[1] for r in R})
+    if len(R) < 10 or len(teams) < 4:
+        return None
+    att = {t: 0.0 for t in teams}; dfn = {t: 0.0 for t in teams}
+    c, ha = 0.25, 0.15
+    for _ in range(80):
+        mx = 0.0
+        for which in ("att", "dfn", "c"):
+            oS = dict.fromkeys(teams, 0.0); eS = dict.fromkeys(teams, 0.0)
+            oC = dict.fromkeys(teams, 0.0); eC = dict.fromkeys(teams, 0.0)
+            sx = sy = slh = sla = 0.0
+            for h, a, x, y, w in R:
+                lh = math.exp(c + ha + att[h] - dfn[a]); la = math.exp(c + att[a] - dfn[h])
+                oS[h] += w * x; eS[h] += w * lh; oS[a] += w * y; eS[a] += w * la
+                oC[a] += w * x; eC[a] += w * lh; oC[h] += w * y; eC[h] += w * la
+                sx += w * x; sy += w * y; slh += w * lh; sla += w * la
+            if which == "att":
+                for t in teams:
+                    st = (oS[t] - eS[t] - tau * att[t]) / (eS[t] + tau); att[t] += st; mx = max(mx, abs(st))
+            elif which == "dfn":
+                for t in teams:
+                    st = (eC[t] - oC[t] - tau * dfn[t]) / (eC[t] + tau); dfn[t] += st; mx = max(mx, abs(st))
+            elif slh + sla > 0 and sx + sy > 0:
+                st = math.log((sx + sy) / (slh + sla)); c += st; mx = max(mx, abs(st))
+                if sx > 0 and slh > 0:
+                    s2 = math.log((sx / slh) / ((sx + sy) / (slh + sla))); ha += s2; mx = max(mx, abs(s2))
+        if mx < 1e-5:
+            break
+    return dict(c=round(c, 5), ha=round(ha, 5), att={t: round(v, 5) for t, v in att.items()},
+                dfn={t: round(v, 5) for t, v in dfn.items()})
+
+
+def predict_mix(key, st, home, away, base):
+    """Previsão combinada (experimental): média das tabelas de placares do modelo atual e do Dixon-Coles completo.
+    base = resultado de predict() para o mesmo jogo. Devolve None quando a liga ainda não tem o ajuste."""
+    dc = st.get("dc")
+    if not dc or "lh" not in base:
+        return None
+    lh = math.exp(dc["c"] + dc["ha"] + dc["att"].get(home, 0.0) - dc["dfn"].get(away, 0.0))
+    la = math.exp(dc["c"] + dc["att"].get(away, 0.0) - dc["dfn"].get(home, 0.0))
+    muH, muA = league_means(key, st)
+    tot, mean_tot = lh + la, muH + muA
+    if tot > 0:
+        f = (mean_tot + (1 - GOALS_SHRINK) * (tot - mean_tot)) / tot
+        lh, la = lh * f, la * f
+    if lh > 0 and la > 0 and STRENGTH_STRETCH != 1:
+        tot, r = lh + la, (lh / la) ** STRENGTH_STRETCH
+        lh = tot * r / (1 + r)
+        la = tot - lh
+    lh, la = min(5.0, max(0.15, lh)), min(5.0, max(0.15, la))
+    M1, M2 = score_matrix(base["lh"], base["la"]), score_matrix(lh, la)
+    M = [[(1 - MIX_W) * p + MIX_W * q for p, q in zip(r1, r2)] for r1, r2 in zip(M1, M2)]
+    out = score_model((1 - MIX_W) * base["lh"] + MIX_W * lh, (1 - MIX_W) * base["la"] + MIX_W * la, M=M)
+    return {k: out[k] for k in ("lh", "la", "p1", "p2", "p3", "btts", "hda", "sc", "sg")}
 
 
 def _median(xs):
@@ -334,13 +404,17 @@ def team_table(key, prev_rows, cur_rows):
     return sorted(out, key=lambda r: -(r["pts"] - r["xpts"]))
 
 
-def score_model(lh, la, N=10):
+def score_matrix(lh, la, N=10):
     pois = lambda l, n: math.exp(-l) * l ** n / math.factorial(n)
     M = [[pois(lh, i) * pois(la, j) for j in range(N + 1)] for i in range(N + 1)]
     M[0][0] *= max(0.0, 1 - lh * la * RHO); M[0][1] *= max(0.0, 1 + lh * RHO)
     M[1][0] *= max(0.0, 1 + la * RHO);     M[1][1] *= max(0.0, 1 - RHO)
     tot = sum(map(sum, M))
-    M = [[x / tot for x in row] for row in M]
+    return [[x / tot for x in row] for row in M]
+
+
+def score_model(lh, la, N=10, M=None):
+    M = M or score_matrix(lh, la, N)
     cells = [(M[i][j], i, j) for i in range(N + 1) for j in range(N + 1)]
     P = lambda f: sum(p for p, i, j in cells if f(i, j))
     top = sorted(cells, reverse=True)[:3]
@@ -638,7 +712,7 @@ def link(existing, f):
     return best if score >= 0.6 else None
 
 
-COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj", "tb", "pos")
+COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj", "mix", "tb", "pos")
 
 
 def archive(data):
@@ -742,6 +816,12 @@ def main():
             except Exception as e:  # noqa: BLE001
                 log("Aviso: não consegui montar a tabela de times de %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
             st["obs_cur"] = round(sum(r[2] + r[3] for r in cur_rows) / len(cur_rows), 2) if cur_rows else None
+            try:  # previsão combinada (experimental); nunca derruba a atualização
+                dc = fit_dc(prev_rows + cur_rows, now.isoformat())
+                if dc:
+                    st["dc"] = dc
+            except Exception as e:  # noqa: BLE001
+                log("Aviso: sem previsão combinada para %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
         except ProviderError as e:
             log("AVISO: sem estatísticas de %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
             fails.append((LEAGUES[f["lg"]]["name"], str(e)))
@@ -774,6 +854,11 @@ def main():
                 m["res"] = f["res"]
             if ko > now and f["lg"] in stats:
                 m.update(predict(f["lg"], stats[f["lg"]], f["h"], f["a"])); upd += 1
+                mix = predict_mix(f["lg"], stats[f["lg"]], f["h"], f["a"], m)
+                if mix:
+                    m["mix"] = mix
+                else:
+                    m.pop("mix", None)
                 tb, pos = top_bottom(f["lg"], stats[f["lg"]], f["h"], f["a"])
                 m["pos"] = pos
                 if tb:
