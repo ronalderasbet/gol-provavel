@@ -971,6 +971,8 @@ def main():
                         leagues_fail=[n for n, _ in fails], fail_reason=friendly([fails[0][1]]) if fails else None,
                         added=added, updated=upd, odds_matches=with_odds, odds_fail=odds_fail,
                         inj_matches=with_inj, inj_error=inj_err)
+    # placar ao vivo e notificações: endereço do serviço na Cloudflare (variável LIVE_URL do GitHub)
+    data["live_url"] = os.environ.get("LIVE_URL", "").strip().rstrip("/") or None
     for k in ("warning", "warning_key", "warning_params"):
         data.pop(k, None)
     if sum(found.values()) and not stats:
