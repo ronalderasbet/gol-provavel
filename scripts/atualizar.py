@@ -34,6 +34,10 @@ VALUE_MIN = 0.05          # destaque de "valor" a partir de +5% (chance do app �
 INJ_MAX_AGE_H = 3         # desfalques: renovados a cada 3 horas
 PLAYER_MAX_AGE_D = 7      # estatísticas de jogadores desfalcados: renovadas a cada 7 dias
 PLAYER_CALLS_MAX = 150    # teto de consultas de jogadores por execução (protege a cota)
+STRENGTH_STRETCH = 1.10   # estica 10% a diferença de força entre os times: corrige o favorito subestimado nos
+                          # confrontos desiguais (ajustado em 2024-25, confirmado em 2025-26)
+TB_MIN_GAMES = 5          # sinal "Top 3 x 5 últimos" só depois de cada time ter 5 jogos na temporada
+TB_EXCLUDE = {"ucl", "uel", "uecl", "cdb", "lib", "sud"}   # copas: sem tabela de pontos corridos
 GOALS_SHRINK = 0.19       # puxa o total de gols esperado 19% para a média da liga (corrige excesso de confiança
                           # nos mercados de gols; ajustado em 2024-25 e confirmado em 2025-26, 4.706 jogos)
 # (meia-vida e uso da temporada anterior escolhidos por teste em 22 temporadas reais, 6.846 jogos)
@@ -131,7 +135,7 @@ def build_stats(rows, ref=None, half_life=None):
     for team, e in t.items():
         e["w"] = [round(v, 3) for v in e["w"]]
         e["f"] = "".join(r for _, r in sorted(hist[team])[-5:])
-    return dict(teams=t, n=len(rows), gh=gh, ga=ga, v=2)
+    return dict(teams=t, n=len(rows), gh=gh, ga=ga, v=3)
 
 
 def league_means(key, st):
@@ -161,6 +165,10 @@ def predict(key, st, home, away):
     if tot > 0:
         f = (mean_tot + (1 - GOALS_SHRINK) * (tot - mean_tot)) / tot
         lh, la = lh * f, la * f
+    if lh > 0 and la > 0 and STRENGTH_STRETCH != 1:
+        tot, r = lh + la, (lh / la) ** STRENGTH_STRETCH
+        lh = tot * r / (1 + r)
+        la = tot - lh
     lh, la = min(5.0, max(0.15, lh)), min(5.0, max(0.15, la))
     return dict(score_model(lh, la), sh=th.get("c", th["r"][:3]), sa=ta.get("c", ta["r"][:3]), fh=th.get("f", ""), fa=ta.get("f", ""))
 
@@ -265,6 +273,35 @@ def injury_adjust(m, inj, stats_lg):
     if abs(lh - m["lh"]) < 1e-4 and abs(la - m["la"]) < 1e-4:
         return None
     return score_model(min(5.0, max(0.15, lh)), min(5.0, max(0.15, la)))
+
+
+def standings(rows):
+    """Classificação por pontos, saldo e gols marcados: {time: [posição, jogos]}."""
+    t = {}
+    for h, a, x, y, *_ in rows:
+        for team, gf, gc in ((h, x, y), (a, y, x)):
+            e = t.setdefault(team, [0, 0, 0, 0])
+            e[0] += 3 if gf > gc else (1 if gf == gc else 0); e[1] += gf - gc; e[2] += gf; e[3] += 1
+    order = sorted(t, key=lambda k: (-t[k][0], -t[k][1], -t[k][2]))
+    return {team: [i + 1, t[team][3]] for i, team in enumerate(order)}
+
+
+def top_bottom(key, st, home, away):
+    """Sinal de jogo desigual: 'home' = Top 3 em casa contra um dos 5 últimos; 'away' = Top 3 visitando um dos 5 últimos."""
+    if key in TB_EXCLUDE or not st or not st.get("rank"):
+        return None, None
+    rk, n = st["rank"], len(st["rank"])
+    if home not in rk or away not in rk or n < 10:
+        return None, None
+    (rh, gh), (ra, ga) = rk[home], rk[away]
+    pos = [rh, ra, n]
+    if gh < TB_MIN_GAMES or ga < TB_MIN_GAMES:
+        return None, pos
+    if rh <= 3 and ra >= n - 4:
+        return "home", pos
+    if ra <= 3 and rh >= n - 4:
+        return "away", pos
+    return None, pos
 
 
 def team_table(key, prev_rows, cur_rows):
@@ -601,7 +638,7 @@ def link(existing, f):
     return best if score >= 0.6 else None
 
 
-COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj")
+COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj", "tb", "pos")
 
 
 def archive(data):
@@ -675,7 +712,7 @@ def main():
     for f in {(f["lg"], f["season"]): f for d in new_dates for f in fx[d]}.values():
         ck = "%s|%s" % (f["lg"], f["season"])
         c = cache.get(ck)
-        fresh = c and c.get("st", {}).get("v") == 2 and (now - datetime.fromisoformat(c["at"])).total_seconds() < STATS_MAX_AGE_H * 3600
+        fresh = c and c.get("st", {}).get("v") == 3 and (now - datetime.fromisoformat(c["at"])).total_seconds() < STATS_MAX_AGE_H * 3600
         if fresh and not force:
             stats[f["lg"]] = c["st"]; continue
         prev_rows = []
@@ -699,6 +736,7 @@ def main():
             for team, e in st["teams"].items():
                 e["c"] = cur_only.get(team, {"r": [0, 0, 0]})["r"][:3]   # só a temporada atual, para exibir
             st["n_cur"] = len(cur_rows)
+            st["rank"] = standings(cur_rows)
             try:  # estatística "times x previsão" (simulação da temporada); nunca derruba a atualização
                 data.setdefault("teams", {})[f["lg"]] = {"at": today, "rows": team_table(f["lg"], prev_rows, cur_rows)}
             except Exception as e:  # noqa: BLE001
@@ -707,7 +745,7 @@ def main():
         except ProviderError as e:
             log("AVISO: sem estatísticas de %s -> %s" % (LEAGUES[f["lg"]]["name"], e))
             fails.append((LEAGUES[f["lg"]]["name"], str(e)))
-            if c and c.get("st", {}).get("v") == 2:
+            if c and c.get("st", {}).get("v") == 3:
                 stats[f["lg"]] = c["st"]
             continue
         stats[f["lg"]] = st
@@ -736,6 +774,12 @@ def main():
                 m["res"] = f["res"]
             if ko > now and f["lg"] in stats:
                 m.update(predict(f["lg"], stats[f["lg"]], f["h"], f["a"])); upd += 1
+                tb, pos = top_bottom(f["lg"], stats[f["lg"]], f["h"], f["a"])
+                m["pos"] = pos
+                if tb:
+                    m["tb"] = tb
+                else:
+                    m.pop("tb", None)
     log("Jogos novos: %d · previsões calculadas: %d" % (added, upd))
 
     # 4) odds das casas (só antes do apito; ficam congeladas depois, como as previsões)
