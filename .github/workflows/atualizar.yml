@@ -31,6 +31,7 @@ jobs:
         env:
           APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
           FOOTBALLDATA_KEY: ${{ secrets.FOOTBALLDATA_KEY }}
+          LIVE_URL: ${{ vars.LIVE_URL }}
         run: python scripts/atualizar.py
 
       - name: Salvar histórico no repositório
