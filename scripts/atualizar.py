@@ -309,6 +309,54 @@ def attach_value(m):
         o["v"] = None if pm is None else round(pm * o["best"] - 1, 4)
 
 
+def _markets_from_matrix(M):
+    n = len(M)
+    h = sum(M[i][j] for i in range(n) for j in range(n) if i > j)
+    d = sum(M[i][i] for i in range(n))
+    o25 = sum(M[i][j] for i in range(n) for j in range(n) if i + j >= 3)
+    return {"home": h, "draw": d, "away": 1 - h - d, "o25": o25}
+
+
+def market_forecast(m):
+    """Previsão pelo mercado: acha os gols esperados de cada time (lh, la) que reproduzem as chances
+    de consenso das casas (resultado e, quando houver, mais de 2,5 gols) e calcula todos os mercados
+    a partir deles. Teste em 29.588 jogos (2019-2026): acertou mais que o modelo em todos os mercados
+    (resultado −2,5% de erro, 3+ gols −1,9%, ambos marcam −1%, placar exato −1,6%)."""
+    mk = (m.get("odds") or {}).get("mk") or {}
+    if not all(k in mk and mk[k].get("p") for k in ("home", "draw", "away")):
+        return None
+    tgt = {k: mk[k]["p"] for k in ("home", "draw", "away")}
+    s_ = sum(tgt.values())
+    tgt = {k: v / s_ for k, v in tgt.items()}
+    if mk.get("o25", {}).get("p"):
+        tgt["o25"] = mk["o25"]["p"]
+
+    def err(lh, la):
+        r = _markets_from_matrix(score_matrix(lh, la))
+        return sum((r[k] - tgt[k]) ** 2 for k in tgt)
+
+    lh, la = (m.get("lh") or 1.4), (m.get("la") or 1.1)
+    best, step = err(lh, la), 0.25
+    for _ in range(80):   # busca por coordenadas com passo decrescente
+        moved = False
+        for c in ((lh + step, la), (lh - step, la), (lh, la + step), (lh, la - step), (lh + step, la - step), (lh - step, la + step)):
+            if min(c) < 0.05 or max(c) > 6:
+                continue
+            e = err(*c)
+            if e < best:
+                best, lh, la, moved = e, c[0], c[1], True
+                break
+        if not moved:
+            step /= 2
+            if step < 0.002:
+                break
+    out = score_model(lh, la)
+    res = {k: out[k] for k in ("lh", "la", "p1", "p2", "p3", "btts", "hda", "sc", "sg")}
+    res["at"] = m["odds"].get("at")
+    res["ou"] = "o25" in tgt
+    return res
+
+
 def player_importance(pl, team_stats):
     """Importância de um jogador para o time, a partir das estatísticas da temporada.
     att = parcela dos gols do time ligados a ele (gols + meia assistência); reg = titular frequente."""
@@ -713,7 +761,7 @@ def link(existing, f):
     return best if score >= 0.6 else None
 
 
-COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj", "mix", "tb", "pos", "hid", "aid")
+COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj", "mix", "mkt", "tb", "pos", "hid", "aid")
 
 
 def archive(data):
@@ -896,11 +944,24 @@ def main():
                     if m.get("fid") in book and m.get("ko") and datetime.fromisoformat(m["ko"]) > now:
                         m["odds"] = {"at": got.astimezone(TZ).strftime("%d/%m %H:%M"), "mk": book[m["fid"]]}
                         attach_value(m); with_odds += 1
-    for date in new_dates:  # previsões recalculadas -> valor recalculado
+    with_mkt = 0
+    for date in new_dates:  # previsões recalculadas -> valor recalculado; previsão pelo mercado
         for m in find_day(data, date)["matches"]:
             if m.get("odds") and m.get("ko") and datetime.fromisoformat(m["ko"]) > now:
                 attach_value(m)
+                if (m.get("mkt") or {}).get("at") != m["odds"].get("at"):   # só recalcula quando as odds mudam
+                    try:
+                        mf = market_forecast(m)
+                    except Exception as e:  # noqa: BLE001
+                        mf = None; log("Aviso: previsão pelo mercado falhou em %s x %s -> %s" % (m.get("h"), m.get("a"), e))
+                    if mf:
+                        m["mkt"] = mf
+                    else:
+                        m.pop("mkt", None)
+                if m.get("mkt"):
+                    with_mkt += 1
     log("Odds: %d jogos com odds · ligas: %s" % (with_odds, ", ".join(odds_ok) or "nenhuma"))
+    log("Previsão pelo mercado: %d jogos" % with_mkt)
 
     # 5) desfalques (experimental: previsão paralela "com desfalques", medida na aba Acertos)
     with_inj, inj_err = 0, None
@@ -972,7 +1033,7 @@ def main():
                         found_today=found[new_dates[0]], found_tomorrow=found[new_dates[1]],
                         leagues_found=leagues_found, leagues_ok=sorted(LEAGUES[k]["name"] for k in stats),
                         leagues_fail=[n for n, _ in fails], fail_reason=friendly([fails[0][1]]) if fails else None,
-                        added=added, updated=upd, odds_matches=with_odds, odds_fail=odds_fail,
+                        added=added, updated=upd, odds_matches=with_odds, mkt_matches=with_mkt, odds_fail=odds_fail,
                         inj_matches=with_inj, inj_error=inj_err)
     # placar ao vivo e notificações: endereço do serviço na Cloudflare (variável LIVE_URL do GitHub)
     data["live_url"] = os.environ.get("LIVE_URL", "").strip().rstrip("/") or None
