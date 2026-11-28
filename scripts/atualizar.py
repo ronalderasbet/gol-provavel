@@ -493,7 +493,8 @@ class APIFootball:
             ft = (f.get("score") or {}).get("fulltime") or {}
             res = [ft["home"], ft["away"]] if st in self.FINISHED and ft.get("home") is not None else ("adiado" if st in self.VOID else None)
             out.append(dict(fid="af%d" % f["fixture"]["id"], lg=key, lid=lg["id"], season=lg["season"], ko=f["fixture"]["date"],
-                            h=f["teams"]["home"]["name"], a=f["teams"]["away"]["name"], res=res))
+                            h=f["teams"]["home"]["name"], a=f["teams"]["away"]["name"], res=res,
+                            hid=f["teams"]["home"].get("id"), aid=f["teams"]["away"].get("id")))
         return out
 
     def injuries(self, fids):
@@ -712,7 +713,7 @@ def link(existing, f):
     return best if score >= 0.6 else None
 
 
-COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj", "mix", "tb", "pos")
+COMPACT_KEYS = ("t", "lg", "h", "a", "res", "p1", "p2", "p3", "btts", "hda", "sc", "sg", "odds", "adj", "mix", "tb", "pos", "hid", "aid")
 
 
 def archive(data):
@@ -850,6 +851,8 @@ def main():
                 day["matches"].append(m); added += 1
             ko = datetime.fromisoformat(f["ko"])
             m.update(fid=f["fid"], ko=f["ko"], hk=f["h"], ak=f["a"], t=ko.astimezone(TZ).strftime("%H:%M"))
+            if f.get("hid") and f.get("aid"):   # ids dos times na API-Football: o app mostra os escudos
+                m["hid"], m["aid"] = f["hid"], f["aid"]
             if f["res"] is not None:
                 m["res"] = f["res"]
             if ko > now and f["lg"] in stats:
