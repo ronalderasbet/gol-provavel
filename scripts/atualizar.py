@@ -30,6 +30,10 @@ RHO = -0.08               # correção de Dixon-Coles para placares baixos
 FORM_HALF_LIFE_DAYS = 365 # forma recente: um jogo de 1 ano atrás vale metade de um jogo de hoje
 PREV_SEASON_MAX_AGE_D = 30  # jogos da temporada anterior: buscados de novo a cada 30 dias
 ODDS_MAX_AGE_H = 3        # odds: a API atualiza a cada 3 horas; buscamos no mesmo ritmo
+ODDS_NEAR_H = 4           # ...mas, se a liga tem jogo nas próximas 4 h, buscamos de hora em hora,
+ODDS_NEAR_MAX_AGE_H = 0.9 # para pegar a última atualização da API o mais perto possível do apito
+CREST_DIR = os.path.join(ROOT, "docs", "escudos")   # escudos dos times guardados no próprio site
+CREST_MAX_PER_RUN = 200
 VALUE_MIN = 0.05          # destaque de "valor" a partir de +5% (chance do app × melhor odd − 1)
 INJ_MAX_AGE_H = 3         # desfalques: renovados a cada 3 horas
 PLAYER_MAX_AGE_D = 7      # estatísticas de jogadores desfalcados: renovadas a cada 7 dias
@@ -496,6 +500,42 @@ class ProviderError(Exception):
     pass
 
 
+def mirror_crests(data):
+    """Baixa os escudos dos times dos jogos recentes e futuros para docs/escudos/{id}.png.
+    Assim o app carrega as imagens do próprio site (rápido, sem depender de outro servidor e
+    funcionando offline). Só baixa o que ainda não tem; a API-Football não conta essas imagens na cota."""
+    os.makedirs(CREST_DIR, exist_ok=True)
+    ids = set()
+    for day in data.get("days", []):
+        for m in day.get("matches", []):
+            for k in ("hid", "aid"):
+                if m.get(k):
+                    ids.add(int(m[k]))
+    got = fail = 0
+    for tid in sorted(ids):
+        path = os.path.join(CREST_DIR, "%d.png" % tid)
+        if os.path.exists(path) and os.path.getsize(path) > 100:
+            continue
+        if got + fail >= CREST_MAX_PER_RUN:
+            break
+        try:
+            req = urllib.request.Request("https://media.api-sports.io/football/teams/%d.png" % tid,
+                                         headers={"User-Agent": "gol-provavel/2.0"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                img = r.read()
+            if len(img) > 100 and img[:4] == b"\x89PNG":
+                with open(path, "wb") as fh:
+                    fh.write(img)
+                got += 1
+            else:
+                fail += 1
+        except Exception:  # noqa: BLE001
+            fail += 1
+    have = len([x for x in os.listdir(CREST_DIR) if x.endswith(".png")])
+    log("Escudos: %d novos, %d falhas, %d no site" % (got, fail, have))
+    return have
+
+
 def http_json(url, headers):
     req = urllib.request.Request(url, headers={"User-Agent": "gol-provavel/2.0", **headers})
     try:
@@ -929,7 +969,10 @@ def main():
         for (lg, lid, season), fids in upcoming.items():
             ck = "odds|%s|%s" % (lg, season)
             c = cache.get(ck)
-            if c and (now - datetime.fromisoformat(c["at"])).total_seconds() < ODDS_MAX_AGE_H * 3600:
+            soon = any(datetime.fromisoformat(f["ko"]) - now <= timedelta(hours=ODDS_NEAR_H)
+                       for date in new_dates for f in fx[date] if f["fid"] in fids)
+            max_age = ODDS_NEAR_MAX_AGE_H if soon else ODDS_MAX_AGE_H
+            if c and (now - datetime.fromisoformat(c["at"])).total_seconds() < max_age * 3600:
                 book, got = c["odds"], datetime.fromisoformat(c["at"])
             else:
                 try:
@@ -1052,6 +1095,10 @@ def main():
         data["warning"] = ("A API respondeu, mas não trouxe nenhum jogo das competições acompanhadas para hoje e amanhã. "
                            "Se isso se repetir em dias com rodada, o plano da API pode estar limitando as datas.")
         data["warning_key"], data["warning_params"] = "nogames", {}
+    try:
+        data["crests"] = mirror_crests(data)
+    except Exception as e:  # noqa: BLE001
+        log("Aviso: escudos não baixados -> %s" % e)
     data.update(updated=today, updated_time=now.strftime("%H:%M"), source=prov.name,
                 quota=prov.remaining, version=2)
     save(DATA_PATH, data, indent=None)
