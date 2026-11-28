@@ -424,8 +424,12 @@ function toggleFav(name){ var f=favs(), i=f.indexOf(name); if(i>=0) f.splice(i,1
 function crest(id){
   if (!id) return null;
   var i=el("img","crest"); i.alt=""; i.loading="lazy"; i.decoding="async"; i.width=20; i.height=20;
-  i.referrerPolicy="no-referrer"; i.src="https://media.api-sports.io/football/teams/"+id+".png";
-  i.onerror=function(){ if (i.parentNode) i.parentNode.removeChild(i); };
+  // primeiro o escudo guardado no próprio site; se ainda não existir, tenta a fonte original uma vez
+  i.src="escudos/"+id+".png";
+  i.onerror=function(){
+    if (!i.dataset.alt){ i.dataset.alt="1"; i.src="https://media.api-sports.io/football/teams/"+id+".png"; return; }
+    if (i.parentNode) i.parentNode.removeChild(i);
+  };
   return i;
 }
 function teamIds(){
