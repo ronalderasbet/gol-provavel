@@ -1,1 +1,41 @@
+name: Baixar odds históricas
 
+# Roda só quando você manda (Actions → Baixar odds históricas → Run workflow).
+# Baixa do football-data.co.uk as temporadas com odds de abertura e de fechamento
+# e salva na pasta historico-odds do repositório, para o teste das estratégias.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  baixar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baixar os arquivos
+        run: |
+          mkdir -p historico-odds
+          cd historico-odds
+          for s in 1920 2021 2122 2223 2324 2425 2526 2627; do
+            for l in E0 SP1 D1 I1 F1 N1 P1 T1; do
+              curl -sfL --retry 3 -o "${s}_${l}.csv" "https://www.football-data.co.uk/mmz4281/${s}/${l}.csv" || { echo "faltou ${s} ${l}"; rm -f "${s}_${l}.csv"; }
+            done
+          done
+          for x in BRA ARG MEX USA; do
+            curl -sfL --retry 3 -o "${x}.csv" "https://www.football-data.co.uk/new/${x}.csv" || { echo "faltou ${x}"; rm -f "${x}.csv"; }
+          done
+          ls -la
+          echo "Arquivos baixados: $(ls | wc -l)"
+
+      - name: Salvar no repositório
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add historico-odds
+          git diff --cached --quiet && exit 0
+          git commit -m "Odds históricas para o teste das estratégias"
+          git pull --rebase
+          git push
